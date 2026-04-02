@@ -9,6 +9,7 @@ description = "Minimal standalone coding agent backed by Ollama"
 requires-python = ">=3.10"
 dependencies = [
     "pytest>=9.0.2",
+    "prompt-toolkit>=3.0.41",
 ]
 
 [project.scripts]

@@ -12,6 +12,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import InMemoryHistory
 
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
 HELP_TEXT = "/help, /memory, /session, /reset, /exit"
@@ -926,6 +928,9 @@ def build_arg_parser():
     return parser
 
 
+_prompt_session = PromptSession(history=InMemoryHistory())
+
+
 def main(argv=None):
     args = build_arg_parser().parse_args(argv)
     agent = build_agent(args)
@@ -945,7 +950,7 @@ def main(argv=None):
 
     while True:
         try:
-            user_input = input("\nmini-coding-agent> ").strip()
+            user_input = _prompt_session.prompt("\nmini-coding-agent> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("")
             return 0
@@ -973,6 +978,7 @@ def main(argv=None):
             print(agent.ask(user_input))
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
+
 
 
 if __name__ == "__main__":
