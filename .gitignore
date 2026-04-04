@@ -31,5 +31,8 @@ htmlcov/
 # Local scratch space
 tmp/
 
+# Environment secrets
+.env
+
 # OS files
 .DS_Store

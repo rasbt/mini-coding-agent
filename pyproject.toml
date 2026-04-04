@@ -22,3 +22,8 @@ dev = [
 
 [tool.setuptools]
 py-modules = ["mini_coding_agent"]
+
+[tool.uv.workspace]
+members = [
+    "mini-flask",
+]

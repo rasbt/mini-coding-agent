@@ -48,6 +48,32 @@ IGNORED_PATH_NAMES = {".git", ".mini-coding-agent", "__pycache__", ".pytest_cach
 # 6) Delegation And Bounded Subagents -> tool_delegate
 
 
+def load_dotenv(cwd="."):
+    """Load .env file from cwd into os.environ (no-op if missing)."""
+    env_path = Path(cwd).resolve() / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+def detect_provider(model):
+    """Return 'openai', 'claude', or 'ollama' based on model name."""
+    m = model.lower()
+    if m.startswith(("gpt-", "gpt4", "o1", "o3", "o4")):
+        return "openai"
+    if m.startswith("claude"):
+        return "claude"
+    return "ollama"
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -224,6 +250,78 @@ class OllamaModelClient:
         if data.get("error"):
             raise RuntimeError(f"Ollama error: {data['error']}")
         return data.get("response", "")
+
+
+class OpenAIModelClient:
+    def __init__(self, model, temperature, top_p, timeout):
+        self.model = model
+        self.temperature = temperature
+        self.top_p = top_p
+        self.timeout = timeout
+        self.api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not self.api_key:
+            raise RuntimeError("OPENAI_API_KEY not set. Add it to .env or export it.")
+
+    def complete(self, prompt, max_new_tokens):
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_new_tokens,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+        }
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"OpenAI request failed with HTTP {exc.code}: {body}") from exc
+        return data["choices"][0]["message"]["content"]
+
+
+class ClaudeModelClient:
+    def __init__(self, model, temperature, top_p, timeout):
+        self.model = model
+        self.temperature = temperature
+        self.top_p = top_p
+        self.timeout = timeout
+        self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not self.api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set. Add it to .env or export it.")
+
+    def complete(self, prompt, max_new_tokens):
+        payload = {
+            "model": self.model,
+            "max_tokens": max_new_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self.temperature,
+        }
+        request = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Anthropic request failed with HTTP {exc.code}: {body}") from exc
+        return data["content"][0]["text"]
 
 
 class MiniAgent:
@@ -912,16 +1010,36 @@ def build_welcome(agent, model, host):
     return "\n".join([line, *rows, line])
 
 
-def build_agent(args):
-    workspace = WorkspaceContext.build(args.cwd)
-    store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
-    model = OllamaModelClient(
+def build_model_client(args):
+    provider = detect_provider(args.model)
+    if provider == "openai":
+        return OpenAIModelClient(
+            model=args.model,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            timeout=args.ollama_timeout,
+        )
+    if provider == "claude":
+        return ClaudeModelClient(
+            model=args.model,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            timeout=args.ollama_timeout,
+        )
+    return OllamaModelClient(
         model=args.model,
         host=args.host,
         temperature=args.temperature,
         top_p=args.top_p,
         timeout=args.ollama_timeout,
     )
+
+
+def build_agent(args):
+    workspace = WorkspaceContext.build(args.cwd)
+    store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
+    load_dotenv(args.cwd)
+    model = build_model_client(args)
     session_id = args.resume
     if session_id == "latest":
         session_id = store.latest()
@@ -948,11 +1066,11 @@ def build_agent(args):
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description="Minimal coding agent for Ollama models.",
+        description="Minimal coding agent for Ollama, OpenAI, and Claude models.",
     )
     parser.add_argument("prompt", nargs="*", help="Optional one-shot prompt.")
     parser.add_argument("--cwd", default=".", help="Workspace directory.")
-    parser.add_argument("--model", default="qwen3.5:4b", help="Ollama model name.")
+    parser.add_argument("--model", default="qwen3.5:4b", help="Model name. Prefix auto-detects provider: gpt-*/o1/o3/o4 -> OpenAI, claude-* -> Anthropic, else -> Ollama.")
     parser.add_argument("--host", default="http://127.0.0.1:11434", help="Ollama server URL.")
     parser.add_argument("--ollama-timeout", type=int, default=300, help="Ollama request timeout in seconds.")
     parser.add_argument("--resume", default=None, help="Session id to resume or 'latest'.")
