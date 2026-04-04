@@ -17,6 +17,7 @@ The system is organized around **six components** annotated directly in the sour
 **from: Components of A Coding Agent**
 > "I think this is one of the underrated, boring parts of good coding-agent design. A lot of apparent 'model quality' is really context quality."
 
+[`mini_coding_agent.py#L41-L48`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L41-L48)
 ```python
 ##############################
 #### Six Agent Components ####
@@ -29,11 +30,11 @@ The system is organized around **six components** annotated directly in the sour
 # 6) Delegation And Bounded Subagents -> tool_delegate
 ```
 
-The central class `MiniAgent` orchestrates all six components. When a user message arrives, the `ask()` method assembles a prompt (components 1+2), enters a loop that calls the model and parses its response (component 3), clips and compresses context each turn (component 4), records every event to the session transcript and working memory (component 5), and optionally delegates to a bounded child agent (component 6).
+The central class [`MiniAgent`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L229) orchestrates all six components. When a user message arrives, the [`ask()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L460) method assembles a prompt (components 1+2), enters a loop that calls the model and parses its response (component 3), clips and compresses context each turn (component 4), records every event to the session transcript and working memory (component 5), and optionally delegates to a bounded child agent (component 6).
 
-Two model clients are provided: `OllamaModelClient` for real inference against Ollama's `/api/generate` endpoint, and `FakeModelClient` for deterministic testing.
+Two model clients are provided: [`OllamaModelClient`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L183) for real inference against Ollama's `/api/generate` endpoint, and [`FakeModelClient`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L171) for deterministic testing.
 
-### Component 1: Live Repo Context (`WorkspaceContext`)
+### Component 1: Live Repo Context ([`WorkspaceContext`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L77))
 
 Before any work begins, the agent snapshots the repository environment: current working directory, git root, branch, default branch, `git status`, recent commits, and key project documents (`AGENTS.md`, `README.md`, `pyproject.toml`, `package.json`).
 
@@ -42,16 +43,16 @@ Before any work begins, the agent snapshots the repository environment: current 
 
 This context is computed once at agent construction and embedded into every prompt, giving the model grounding in the project's current state without needing to discover it through tool calls.
 
-### Component 2: Prompt Shape and Cache Reuse (`build_prefix`, `memory_text`, `prompt`)
+### Component 2: Prompt Shape and Cache Reuse ([`build_prefix`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L337), [`memory_text`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L386), [`prompt`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L430))
 
 The prompt is assembled from three layers: a **stable prefix** (system instructions, tool descriptions, workspace context), a **working memory section** (task, tracked files, notes), and the **transcript** of the current session plus the user's latest message.
 
 **from: Components of A Coding Agent**
 > "The "Stable prompt prefix" means that the information contained there doesn't change too much. It usually contains the general instructions, tool descriptions, and the workspace summary."
 
-The prefix is computed once (`build_prefix()`) and reused across all model calls within a session. Only the memory and transcript portions change between turns.
+The prefix is computed once ([`build_prefix()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L337)) and reused across all model calls within a session. Only the memory and transcript portions change between turns.
 
-### Component 3: Structured Tools, Validation, and Permissions (`build_tools`, `run_tool`, `validate_tool`, `approve`)
+### Component 3: Structured Tools, Validation, and Permissions ([`build_tools`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L286), [`run_tool`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L511), [`validate_tool`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L551), [`approve`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L617))
 
 The agent exposes a fixed set of named tools (`list_files`, `read_file`, `search`, `run_shell`, `write_file`, `patch_file`, and optionally `delegate`). Each tool has a declared schema, a risk flag, and a runner function. Before execution, every call passes through validation (argument types, path safety, workspace containment) and, for risky tools, an approval gate.
 
@@ -60,25 +61,25 @@ The agent exposes a fixed set of named tools (`list_files`, `read_file`, `search
 
 The model's raw text output is parsed for `<tool>...</tool>` or `<final>...</final>` XML tags. Malformed output triggers a retry with an error notice rather than a crash.
 
-### Component 4: Context Reduction and Output Management (`clip`, `history_text`)
+### Component 4: Context Reduction and Output Management ([`clip`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L56), [`history_text`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L401))
 
-Every piece of text flowing into the prompt is bounded. Tool outputs are clipped to `MAX_TOOL_OUTPUT` (4000 chars). The transcript is compressed by deduplicating older `read_file` results, shortening older entries more aggressively than recent ones, and truncating the entire history to `MAX_HISTORY` (12000 chars).
+Every piece of text flowing into the prompt is bounded. Tool outputs are clipped to [`MAX_TOOL_OUTPUT`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L36) (4000 chars). The transcript is compressed by deduplicating older `read_file` results, shortening older entries more aggressively than recent ones, and truncating the entire history to [`MAX_HISTORY`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L37) (12000 chars).
 
 **from: Components of A Coding Agent**
 > "A minimal harness uses at least two compaction strategies to manage that problem. The first is clipping, which shortens long document snippets, large tool outputs, memory notes, and transcript entries."
 
-### Component 5: Transcripts, Memory, and Resumption (`SessionStore`, `record`, `note_tool`, `ask`)
+### Component 5: Transcripts, Memory, and Resumption ([`SessionStore`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L150), [`record`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L448), [`note_tool`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L452), [`ask`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L460))
 
 The system maintains two layers of memory. The **full transcript** is an append-only list of every user message, tool call, and assistant response. The **working memory** is a small distilled structure (`task`, `files`, `notes`) that is actively maintained as tools execute, acting as a compact summary of what matters right now.
 
 **from: Components of A Coding Agent**
 > "a coding agent separates state into (at least) two layers: working memory: the small, distilled state the agent keeps explicitly [and] a full transcript: this covers all the user requests, tool outputs, and LLM responses"
 
-Sessions are persisted to disk as JSON files via `SessionStore`, enabling resumption across process restarts.
+Sessions are persisted to disk as JSON files via [`SessionStore`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L150), enabling resumption across process restarts.
 
-### Component 6: Delegation and Bounded Subagents (`tool_delegate`)
+### Component 6: Delegation and Bounded Subagents ([`tool_delegate`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L850))
 
-The `delegate` tool spawns a child `MiniAgent` that inherits the model client and workspace but operates under strict constraints: read-only access, no approval for risky tools (`approval_policy="never"`), limited step budget, and incremented depth. The child receives a summarized snapshot of the parent's history as initial notes.
+The `delegate` tool spawns a child [`MiniAgent`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L229) that inherits the model client and workspace but operates under strict constraints: read-only access, no approval for risky tools (`approval_policy="never"`), limited step budget, and incremented depth. The child receives a summarized snapshot of the parent's history as initial notes.
 
 **from: Components of A Coding Agent**
 > "the subagent inherits enough context to be useful, but also has it constrained (for example, read-only and restricted in recursion depth)"
@@ -89,10 +90,11 @@ Delegation is only available when `depth < max_depth`, preventing unbounded recu
 
 ## Part II: Low-Level Detail
 
-### Component 1: Live Repo Context — `WorkspaceContext` in Detail
+### Component 1: Live Repo Context — [`WorkspaceContext`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L77) in Detail
 
-The `WorkspaceContext` class is responsible for gathering all environmental facts. It is a plain data class built via the `build()` classmethod:
+The [`WorkspaceContext`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L77) class is responsible for gathering all environmental facts. It is a plain data class built via the [`build()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L88) classmethod:
 
+[`mini_coding_agent.py#L77-L85`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L77-L85)
 ```python
 class WorkspaceContext:
     def __init__(self, cwd, repo_root, branch, default_branch, status, recent_commits, project_docs):
@@ -105,8 +107,9 @@ class WorkspaceContext:
         self.project_docs = project_docs
 ```
 
-The `build()` method wraps all git commands in a safe helper that returns a fallback string on any failure:
+The [`build()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L88) method wraps all git commands in a safe helper that returns a fallback string on any failure:
 
+[`mini_coding_agent.py#L91-L103`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L91-L103)
 ```python
 def git(args, fallback=""):
     try:
@@ -127,10 +130,12 @@ This makes the context-gathering robust — if the workspace is not a git repo, 
 
 Project documents are discovered by scanning both the repo root and the current working directory for well-known filenames:
 
+[`mini_coding_agent.py#L16`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L16)
 ```python
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
 ```
 
+[`mini_coding_agent.py#L106-L115`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L106-L115)
 ```python
 docs = {}
 for base in (repo_root, cwd):
@@ -146,8 +151,9 @@ for base in (repo_root, cwd):
 
 Documents are clipped to 1200 characters to prevent large files from bloating the context. The deduplication via `key in docs` ensures a file is only included once even if `repo_root == cwd`.
 
-The `text()` method serializes the context into a plain-text block embedded directly in the prompt:
+The [`text()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L127) method serializes the context into a plain-text block embedded directly in the prompt:
 
+[`mini_coding_agent.py#L127-L144`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L127-L144)
 ```python
 def text(self):
     commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
@@ -173,8 +179,9 @@ def text(self):
 
 The prompt is assembled in three methods that layer on top of each other.
 
-**`build_prefix()`** constructs the stable portion at agent init time. It includes the system persona, behavioral rules, tool catalog with schemas and risk labels, example tool-call formats, and the workspace context:
+[**`build_prefix()`**](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L337) constructs the stable portion at agent init time. It includes the system persona, behavioral rules, tool catalog with schemas and risk labels, example tool-call formats, and the workspace context:
 
+[`mini_coding_agent.py#L337-L384`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L337-L384)
 ```python
 def build_prefix(self):
     tool_lines = []
@@ -213,8 +220,9 @@ def build_prefix(self):
 
 The prefix never changes during a session, making it a candidate for KV-cache reuse on backends that support prompt prefix caching.
 
-**`memory_text()`** serializes the working memory:
+[**`memory_text()`**](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L386) serializes the working memory:
 
+[`mini_coding_agent.py#L386-L396`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L386-L396)
 ```python
 def memory_text(self):
     memory = self.session["memory"]
@@ -229,8 +237,9 @@ def memory_text(self):
     ).strip()
 ```
 
-**`prompt()`** combines all three layers — prefix, memory, compressed transcript, and the current user message:
+[**`prompt()`**](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L430) combines all three layers — prefix, memory, compressed transcript, and the current user message:
 
+[`mini_coding_agent.py#L430-L443`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L430-L443)
 ```python
 def prompt(self, user_message):
     return textwrap.dedent(
@@ -254,8 +263,9 @@ This layered structure means the model sees stable instructions first, then a co
 
 #### Tool Registration
 
-Tools are registered in `build_tools()` as a dictionary mapping tool names to their schema, risk level, description, and runner:
+Tools are registered in [`build_tools()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L286) as a dictionary mapping tool names to their schema, risk level, description, and runner:
 
+[`mini_coding_agent.py#L286-L332`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L286-L332)
 ```python
 def build_tools(self):
     tools = {
@@ -288,8 +298,9 @@ The `delegate` tool is conditionally registered only when recursion depth allows
 
 #### Parsing Model Output
 
-The `parse()` static method handles two output formats — JSON-style `<tool>{"name":...}</tool>` and XML-style `<tool name="write_file" path="..."><content>...</content></tool>`. It returns a `(kind, payload)` tuple where `kind` is one of `"tool"`, `"final"`, or `"retry"`:
+The [`parse()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L631) static method handles two output formats — JSON-style `<tool>{"name":...}</tool>` and XML-style `<tool name="write_file" path="..."><content>...</content></tool>`. It returns a `(kind, payload)` tuple where `kind` is one of `"tool"`, `"final"`, or `"retry"`:
 
+[`mini_coding_agent.py#L631-L662`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L631-L662)
 ```python
 @staticmethod
 def parse(raw):
@@ -322,6 +333,7 @@ The priority order is: `<tool>` JSON > `<tool` XML > `<final>` > raw text as imp
 
 The XML parser handles multi-line file content that would be awkward to encode in JSON:
 
+[`mini_coding_agent.py#L676-L697`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L676-L697)
 ```python
 @staticmethod
 def parse_xml_tool(raw):
@@ -348,8 +360,9 @@ def parse_xml_tool(raw):
 
 #### Validation
 
-Every tool call passes through `validate_tool()` before execution. Each tool has custom validation logic:
+Every tool call passes through [`validate_tool()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L551) before execution. Each tool has custom validation logic:
 
+[`mini_coding_agent.py#L551-L616`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L551-L616)
 ```python
 def validate_tool(self, name, args):
     # ...
@@ -372,6 +385,7 @@ def validate_tool(self, name, args):
 
 Validation failures produce error messages with examples to guide the model toward correct usage:
 
+[`mini_coding_agent.py#L515-L522`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L515-L522)
 ```python
 try:
     self.validate_tool(name, args)
@@ -385,8 +399,9 @@ except Exception as exc:
 
 #### Path Sandboxing
 
-All file paths are resolved through the `path()` method, which enforces workspace containment:
+All file paths are resolved through the [`path()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L737) method, which enforces workspace containment:
 
+[`mini_coding_agent.py#L737-L743`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L737-L743)
 ```python
 def path(self, raw_path):
     path = Path(raw_path)
@@ -403,6 +418,7 @@ This prevents the model from reading or writing files outside the repository roo
 
 Risky tools (`run_shell`, `write_file`, `patch_file`) must pass the approval gate before execution:
 
+[`mini_coding_agent.py#L617-L628`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L617-L628)
 ```python
 def approve(self, name, args):
     if self.read_only:
@@ -424,6 +440,7 @@ Three policies are supported: `"ask"` (interactive human confirmation), `"auto"`
 
 The agent prevents infinite loops by detecting when the same tool is called with the same arguments twice consecutively:
 
+[`mini_coding_agent.py#L532-L537`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L532-L537)
 ```python
 def repeated_tool_call(self, name, args):
     tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
@@ -433,10 +450,11 @@ def repeated_tool_call(self, name, args):
     return all(item["name"] == name and item["args"] == args for item in recent)
 ```
 
-#### The `run_tool` Orchestration
+#### The [`run_tool`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L511) Orchestration
 
-All these checks are orchestrated in `run_tool()`:
+All these checks are orchestrated in [`run_tool()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L511):
 
+[`mini_coding_agent.py#L511-L530`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L511-L530)
 ```python
 def run_tool(self, name, args):
     tool = self.tools.get(name)
@@ -466,8 +484,9 @@ The pipeline is: lookup -> validate -> dedup check -> approval -> execute -> cli
 
 #### Output Clipping
 
-The `clip()` function truncates any string that exceeds a limit, appending a notice of how much was removed:
+The [`clip()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L56) function truncates any string that exceeds a limit, appending a notice of how much was removed:
 
+[`mini_coding_agent.py#L36`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L36) · [`mini_coding_agent.py#L56-L60`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L56-L60)
 ```python
 MAX_TOOL_OUTPUT = 4000
 
@@ -482,8 +501,9 @@ This is applied everywhere: tool outputs, project documents (at 1200 chars), mem
 
 #### History Compression
 
-The `history_text()` method implements a recency-weighted compression strategy:
+The [`history_text()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L401) method implements a recency-weighted compression strategy:
 
+[`mini_coding_agent.py#L37`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L37) · [`mini_coding_agent.py#L401-L425`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L401-L425)
 ```python
 MAX_HISTORY = 12000
 
@@ -526,6 +546,7 @@ Three strategies are at work:
 
 Each session is a JSON document with four fields:
 
+[`mini_coding_agent.py#L253-L259`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L253-L259)
 ```python
 self.session = session or {
     "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
@@ -543,18 +564,20 @@ self.session = session or {
 
 Every event (user message, tool result, assistant response) is appended to the transcript and immediately persisted:
 
+[`mini_coding_agent.py#L448-L450`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L448-L450)
 ```python
 def record(self, item):
     self.session["history"].append(item)
     self.session_path = self.session_store.save(self.session)
 ```
 
-The `save()` call writes the entire session to a JSON file on every event, ensuring no work is lost even on a crash.
+The [`save()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L158) call writes the entire session to a JSON file on every event, ensuring no work is lost even on a crash.
 
 #### Working Memory Updates
 
-After each tool execution, `note_tool()` updates the working memory:
+After each tool execution, [`note_tool()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L452) updates the working memory:
 
+[`mini_coding_agent.py#L452-L458`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L452-L458)
 ```python
 def note_tool(self, name, args, result):
     memory = self.session["memory"]
@@ -565,8 +588,9 @@ def note_tool(self, name, args, result):
     self.remember(memory["notes"], note, 5)
 ```
 
-The `remember()` helper implements a bounded, most-recently-used list:
+The [`remember()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L275) helper implements a bounded, most-recently-used list:
 
+[`mini_coding_agent.py#L275-L281`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L275-L281)
 ```python
 @staticmethod
 def remember(bucket, item, limit):
@@ -580,10 +604,11 @@ def remember(bucket, item, limit):
 
 Files touched by file operations are tracked (up to 8), and a condensed note for each tool call is kept (up to 5). This ensures the memory stays small and relevant.
 
-#### The `ask()` Loop — The Heart of the Agent
+#### The [`ask()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L460) Loop — The Heart of the Agent
 
-The `ask()` method is the agentic loop. It records the user message, sets the task in working memory if empty, then enters a loop:
+The [`ask()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L460) method is the agentic loop. It records the user message, sets the task in working memory if empty, then enters a loop:
 
+[`mini_coding_agent.py#L460-L506`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L460-L506)
 ```python
 def ask(self, user_message):
     memory = self.session["memory"]
@@ -631,8 +656,9 @@ This dual-counter design ensures that retries (from malformed model output) don'
 
 #### Session Persistence and Resumption
 
-`SessionStore` manages file-based persistence:
+[`SessionStore`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L150) manages file-based persistence:
 
+[`mini_coding_agent.py#L150-L168`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L150-L168)
 ```python
 class SessionStore:
     def __init__(self, root):
@@ -655,10 +681,11 @@ class SessionStore:
         return files[-1].stem if files else None
 ```
 
-Sessions are stored under `.mini-coding-agent/sessions/` in the workspace root. The `latest()` method supports the `--resume latest` CLI flag by returning the most recently modified session.
+Sessions are stored under `.mini-coding-agent/sessions/` in the workspace root. The [`latest()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L166) method supports the `--resume latest` CLI flag by returning the most recently modified session.
 
 Resumption reconstructs the agent with the saved session intact:
 
+[`mini_coding_agent.py#L264-L272`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L264-L272)
 ```python
 @classmethod
 def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
@@ -673,8 +700,9 @@ def from_session(cls, model_client, workspace, session_store, session_id, **kwar
 
 ### Component 6: Delegation and Bounded Subagents — Child Agent Spawning
 
-The `tool_delegate()` method creates a fully isolated child agent:
+The [`tool_delegate()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L850) method creates a fully isolated child agent:
 
+[`mini_coding_agent.py#L850-L869`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L850-L869)
 ```python
 def tool_delegate(self, args):
     if self.depth >= self.max_depth:
@@ -700,12 +728,12 @@ def tool_delegate(self, args):
 
 Key constraints on the child agent:
 - **`approval_policy="never"`**: The child cannot execute risky tools.
-- **`read_only=True`**: An additional safety check — `approve()` returns `False` when `read_only` is set.
+- **`read_only=True`**: An additional safety check — [`approve()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L617) returns `False` when `read_only` is set.
 - **`depth=self.depth + 1`**: Incremented depth prevents recursive delegation beyond `max_depth` (default 1).
 - **`max_steps` is configurable but defaults to 3**: Smaller budget than the parent's default of 6.
 - **Context seeding**: The child receives the parent's compressed history (clipped to 300 chars) as an initial memory note, plus the delegated task as its task field.
 
-The child runs its own independent `ask()` loop with its own session, transcript, and memory. Its final answer is returned to the parent as a tool result string prefixed with `"delegate_result:\n"`.
+The child runs its own independent [`ask()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L460) loop with its own session, transcript, and memory. Its final answer is returned to the parent as a tool result string prefixed with `"delegate_result:\n"`.
 
 ### How Components Work Together — The Full Request Lifecycle
 
@@ -713,18 +741,19 @@ When a user types a message:
 
 1. **Context (Component 1)** was already captured at startup and baked into the prefix.
 2. **Prompt assembly (Component 2)** combines the stable prefix + working memory + compressed transcript + user message into a single string.
-3. **Model call**: The prompt is sent to Ollama via `model_client.complete()`.
+3. **Model call**: The prompt is sent to Ollama via [`model_client.complete()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L191).
 4. **Parsing (Component 3)**: The raw response is parsed for `<tool>` or `<final>` tags.
 5. **Tool execution (Component 3)**: If a tool call is found, it passes through validation -> dedup -> approval -> execution. The output is clipped (Component 4).
 6. **Recording (Component 5)**: The tool result is appended to the transcript and working memory is updated.
-7. **History compression (Component 4)**: On the next iteration, `history_text()` compresses older entries to fit the budget.
+7. **History compression (Component 4)**: On the next iteration, [`history_text()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L401) compresses older entries to fit the budget.
 8. **Loop**: Steps 2-7 repeat until the model emits a `<final>` answer or the step budget is exhausted.
 9. **Delegation (Component 6)**: If the model calls `delegate`, a constrained child agent runs steps 1-8 independently, and its result feeds back into step 6 of the parent.
 
 ### The Model Backend
 
-The `OllamaModelClient` wraps Ollama's HTTP API:
+The [`OllamaModelClient`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L183) wraps Ollama's HTTP API:
 
+[`mini_coding_agent.py#L191-L226`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L191-L226)
 ```python
 class OllamaModelClient:
     def complete(self, prompt, max_new_tokens):
@@ -751,8 +780,9 @@ class OllamaModelClient:
 
 It uses only the standard library (`urllib.request`), maintaining the zero-dependency design. `stream: False` means the entire response is buffered before returning, and `think: False` disables chain-of-thought from models that support it.
 
-The `FakeModelClient` enables deterministic testing by returning pre-scripted outputs:
+The [`FakeModelClient`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L171) enables deterministic testing by returning pre-scripted outputs:
 
+[`mini_coding_agent.py#L171-L180`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L171-L180)
 ```python
 class FakeModelClient:
     def __init__(self, outputs):
@@ -770,8 +800,9 @@ This is used extensively in the test suite, where each test pre-loads a sequence
 
 ### The CLI and REPL
 
-The `main()` function ties everything together via `argparse`:
+The [`main()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L967) function ties everything together via [`build_arg_parser()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L948) and [`build_agent()`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L915):
 
+[`mini_coding_agent.py#L967-L1017`](https://github.com/mguinada/mini-coding-agent/blob/main/mini_coding_agent.py#L967-L1017)
 ```python
 def main(argv=None):
     args = build_arg_parser().parse_args(argv)
