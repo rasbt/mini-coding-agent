@@ -1,4 +1,5 @@
 import json
+import pytest
 from unittest.mock import patch
 
 from mini_coding_agent import (
@@ -186,6 +187,41 @@ def test_list_files_hides_internal_agent_state(tmp_path):
     assert ".mini-coding-agent" not in result
     assert ".git" not in result
     assert "[F] hello.txt" in result
+
+
+def test_path_rejects_parent_escape(tmp_path):
+    agent = build_agent(tmp_path, [])
+
+    with pytest.raises(ValueError, match="path escapes workspace"):
+        agent.path("../outside.txt")
+
+
+def test_path_rejects_symlink_escape(tmp_path):
+    agent = build_agent(tmp_path, [])
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    link = tmp_path / "outside-link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not available in this environment")
+
+    with pytest.raises(ValueError, match="path escapes workspace"):
+        agent.path("outside-link/secret.txt")
+
+
+def test_path_accepts_case_variant_on_case_insensitive_filesystems(tmp_path):
+    project_root = tmp_path / "Proj"
+    project_root.mkdir()
+    agent = build_agent(project_root, [])
+    variant = project_root.parent / project_root.name.lower() / "README.md"
+
+    if not variant.exists():
+        pytest.skip("case-sensitive filesystem")
+
+    resolved = agent.path(str(variant))
+
+    assert resolved.samefile(project_root / "README.md")
 
 
 def test_repeated_identical_tool_call_is_rejected(tmp_path):

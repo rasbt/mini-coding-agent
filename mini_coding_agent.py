@@ -1,6 +1,5 @@
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -734,11 +733,23 @@ class MiniAgent:
         self.session["memory"] = {"task": "", "files": [], "notes": []}
         self.session_store.save(self.session)
 
+    def path_is_within_root(self, resolved):
+        probe = resolved
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        for candidate in (probe, *probe.parents):
+            try:
+                if candidate.samefile(self.root):
+                    return True
+            except OSError:
+                continue
+        return False
+
     def path(self, raw_path):
         path = Path(raw_path)
         path = path if path.is_absolute() else self.root / path
         resolved = path.resolve()
-        if os.path.commonpath([str(self.root), str(resolved)]) != str(self.root):
+        if not self.path_is_within_root(resolved):
             raise ValueError(f"path escapes workspace: {raw_path}")
         return resolved
 
