@@ -254,6 +254,47 @@ def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):
     assert "commands: Commands:" not in welcome
 
 
+def test_prompt_top_level_sections_stay_flush_left_with_multiline_content(tmp_path):
+    workspace = WorkspaceContext(
+        cwd=str(tmp_path),
+        repo_root=str(tmp_path),
+        branch="fix/prompt-indentation",
+        default_branch="main",
+        status=" M mini_coding_agent.py\n?? tests/test_prompt.py",
+        recent_commits=["abc123 first commit", "def456 second commit"],
+        project_docs={"README.md": "line1\nline2"},
+    )
+    store = SessionStore(tmp_path / ".mini-coding-agent" / "sessions")
+    agent = MiniAgent(
+        model_client=FakeModelClient([]),
+        workspace=workspace,
+        session_store=store,
+        approval_policy="auto",
+    )
+    agent.session["memory"] = {
+        "task": "verify prompt formatting",
+        "files": ["mini_coding_agent.py"],
+        "notes": ["saw inconsistent indentation", "need regression coverage"],
+    }
+    agent.record({"role": "user", "content": "inspect prompt()", "created_at": "1"})
+    agent.record(
+        {
+            "role": "tool",
+            "name": "read_file",
+            "args": {"path": "mini_coding_agent.py"},
+            "content": "    def prompt(self, user_message):\n        ...",
+            "created_at": "2",
+        }
+    )
+
+    prompt = agent.prompt("is this issue legit?")
+    lines = prompt.splitlines()
+
+    for label in ["Rules:", "Tools:", "Valid response examples:", "Workspace:", "Memory:", "Transcript:", "Current user request:"]:
+        assert label in lines
+        assert f"            {label}" not in prompt
+
+
 def _make_filler(i):
     return {"role": "tool", "name": "list_files", "args": {}, "content": "", "created_at": str(i)}
 

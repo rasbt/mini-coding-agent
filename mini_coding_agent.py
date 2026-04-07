@@ -4,7 +4,6 @@ import re
 import shutil
 import subprocess
 import sys
-import textwrap
 import urllib.error
 import urllib.request
 import uuid
@@ -22,16 +21,16 @@ WELCOME_ART = (
     "\\\\  \\|/  /",
     "`-----'__",
 )
-HELP_DETAILS = textwrap.dedent(
-    """\
-    Commands:
-    /help    Show this help message.
-    /memory  Show the agent's distilled working memory.
-    /session Show the path to the saved session file.
-    /reset   Clear the current session history and memory.
-    /exit    Exit the agent.
-    """
-).strip()
+HELP_DETAILS = "\n".join(
+    [
+        "Commands:",
+        "/help    Show this help message.",
+        "/memory  Show the agent's distilled working memory.",
+        "/session Show the path to the saved session file.",
+        "/reset   Clear the current session history and memory.",
+        "/exit    Exit the agent.",
+    ]
+)
 MAX_TOOL_OUTPUT = 4000
 MAX_HISTORY = 12000
 IGNORED_PATH_NAMES = {".git", ".mini-coding-agent", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "venv"}
@@ -809,15 +808,15 @@ class MiniAgent:
             text=True,
             timeout=timeout,
         )
-        return textwrap.dedent(
-            f"""\
-            exit_code: {result.returncode}
-            stdout:
-            {result.stdout.strip() or "(empty)"}
-            stderr:
-            {result.stderr.strip() or "(empty)"}
-            """
-        ).strip()
+        return "\n".join(
+            [
+                f"exit_code: {result.returncode}",
+                "stdout:",
+                result.stdout.strip() or "(empty)",
+                "stderr:",
+                result.stderr.strip() or "(empty)",
+            ]
+        )
 
     def tool_write_file(self, args):
         path = self.path(args["path"])
