@@ -126,21 +126,19 @@ class WorkspaceContext:
     def text(self):
         commits = "\n".join(f"- {line}" for line in self.recent_commits) or "- none"
         docs = "\n".join(f"- {path}\n{snippet}" for path, snippet in self.project_docs.items()) or "- none"
-        return textwrap.dedent(
-            f"""\
-            Workspace:
-            - cwd: {self.cwd}
-            - repo_root: {self.repo_root}
-            - branch: {self.branch}
-            - default_branch: {self.default_branch}
-            - status:
-            {self.status}
-            - recent_commits:
-            {commits}
-            - project_docs:
-            {docs}
-            """
-        ).strip()
+        return "\n".join([
+            "Workspace:",
+            f"- cwd: {self.cwd}",
+            f"- repo_root: {self.repo_root}",
+            f"- branch: {self.branch}",
+            f"- default_branch: {self.default_branch}",
+            "- status:",
+            self.status,
+            "- recent_commits:",
+            commits,
+            "- project_docs:",
+            docs,
+        ])
 
 
 ##############################
@@ -350,49 +348,42 @@ class MiniAgent:
                 "<final>Done.</final>",
             ]
         )
-        return textwrap.dedent(
-            f"""\
-            You are Mini-Coding-Agent, a small local coding agent running through Ollama.
-
-            Rules:
-            - Use tools instead of guessing about the workspace.
-            - Return exactly one <tool>...</tool> or one <final>...</final>.
-            - Tool calls must look like:
-              <tool>{{"name":"tool_name","args":{{...}}}}</tool>
-            - For write_file and patch_file with multi-line text, prefer XML style:
-              <tool name="write_file" path="file.py"><content>...</content></tool>
-            - Final answers must look like:
-              <final>your answer</final>
-            - Never invent tool results.
-            - Keep answers concise and concrete.
-            - If the user asks you to create or update a specific file and the path is clear, use write_file or patch_file instead of repeatedly listing files.
-            - Before writing tests for existing code, read the implementation first.
-            - When writing tests, match the current implementation unless the user explicitly asked you to change the code.
-            - New files should be complete and runnable, including obvious imports.
-            - Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.
-            - Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or delegate with args={{}}.
-
-            Tools:
-            {tool_text}
-
-            Valid response examples:
-            {examples}
-
-            {self.workspace.text()}
-            """
-        ).strip()
+        rules = "\n".join([
+            "- Use tools instead of guessing about the workspace.",
+            "- Return exactly one <tool>...</tool> or one <final>...</final>.",
+            "- Tool calls must look like:",
+            '  <tool>{"name":"tool_name","args":{...}}</tool>',
+            "- For write_file and patch_file with multi-line text, prefer XML style:",
+            '  <tool name="write_file" path="file.py"><content>...</content></tool>',
+            "- Final answers must look like:",
+            "  <final>your answer</final>",
+            "- Never invent tool results.",
+            "- Keep answers concise and concrete.",
+            "- If the user asks you to create or update a specific file and the path is clear, use write_file or patch_file instead of repeatedly listing files.",
+            "- Before writing tests for existing code, read the implementation first.",
+            "- When writing tests, match the current implementation unless the user explicitly asked you to change the code.",
+            "- New files should be complete and runnable, including obvious imports.",
+            "- Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.",
+            "- Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or delegate with args={}.",
+        ])
+        return "\n\n".join([
+            "You are Mini-Coding-Agent, a small local coding agent running through Ollama.",
+            "Rules:\n" + rules,
+            "Tools:\n" + tool_text,
+            "Valid response examples:\n" + examples,
+            self.workspace.text(),
+        ])
 
     def memory_text(self):
         memory = self.session["memory"]
-        return textwrap.dedent(
-            f"""\
-            Memory:
-            - task: {memory['task'] or "-"}
-            - files: {", ".join(memory["files"]) or "-"}
-            - notes:
-              {chr(10).join(f"- {note}" for note in memory["notes"]) or "- none"}
-            """
-        ).strip()
+        notes = "\n".join(f"- {note}" for note in memory["notes"]) or "- none"
+        return "\n".join([
+            "Memory:",
+            f"- task: {memory['task'] or '-'}",
+            f"- files: {', '.join(memory['files']) or '-'}",
+            "- notes:",
+            notes,
+        ])
 
     #####################################################
     #### 4) Context Reduction And Output Management #####
@@ -430,19 +421,12 @@ class MiniAgent:
     #### 2) Prompt Shape And Cache Reuse (Continued) #######
     ########################################################
     def prompt(self, user_message):
-        return textwrap.dedent(
-            f"""\
-            {self.prefix}
-
-            {self.memory_text()}
-
-            Transcript:
-            {self.history_text()}
-
-            Current user request:
-            {user_message}
-            """
-        ).strip()
+        return "\n\n".join([
+            self.prefix,
+            self.memory_text(),
+            "Transcript:\n" + self.history_text(),
+            "Current user request:\n" + user_message,
+        ])
 
     ###############################################
     #### 5) Session Memory (Continued) ###########
