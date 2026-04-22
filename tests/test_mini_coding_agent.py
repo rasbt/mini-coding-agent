@@ -397,3 +397,38 @@ def test_ollama_client_posts_expected_payload():
     assert captured["body"]["raw"] is False
     assert captured["body"]["think"] is False
     assert captured["body"]["options"]["num_predict"] == 42
+
+
+def test_history_text_preserves_recent_when_truncating(tmp_path):
+    """When history exceeds MAX_HISTORY, recent items should be preserved."""
+    from mini_coding_agent import MAX_HISTORY
+
+    agent = build_agent(tmp_path, [])
+
+    # Create history that exceeds MAX_HISTORY
+    for i in range(70):
+        agent.record({
+            "role": "tool",
+            "name": "read_file",
+            "args": {"path": f"file{i}.txt"},
+            "content": "x" * 500,  # 500 chars of content
+            "created_at": str(i),
+        })
+
+    history = agent.history_text()
+
+    # Verify truncation message is at the TOP (indicating oldest was cut)
+    assert history.startswith("...[truncated")
+
+    # Verify recent entries are present (last 6 are "recent")
+    assert "file69.txt" in history  # most recent
+    assert "file68.txt" in history
+    assert "file67.txt" in history
+
+    # Verify oldest entries are NOT present
+    assert "file0.txt" not in history
+    assert "file1.txt" not in history
+
+    # Verify the length is strictly controlled
+    # It should be roughly MAX_HISTORY + length of the truncation message
+    assert len(history) <= MAX_HISTORY + 100
