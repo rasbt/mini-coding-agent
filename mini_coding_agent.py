@@ -58,6 +58,13 @@ def clip(text, limit=MAX_TOOL_OUTPUT):
     return text[:limit] + f"\n...[truncated {len(text) - limit} chars]"
 
 
+def tail_clip(text, limit=MAX_HISTORY):
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return f"...[truncated {len(text) - limit} chars]\n" + text[-limit:]
+
+
 def middle(text, limit):
     text = str(text).replace("\n", " ")
     if len(text) <= limit:
@@ -414,7 +421,7 @@ class MiniAgent:
                 limit = 900 if recent else 220
                 lines.append(f"[{item['role']}] {clip(item['content'], limit)}")
 
-        return clip("\n".join(lines), MAX_HISTORY)
+        return tail_clip("\n".join(lines), MAX_HISTORY)
 
     ########################################################
     #### 2) Prompt Shape And Cache Reuse (Continued) #######
