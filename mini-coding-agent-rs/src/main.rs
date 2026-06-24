@@ -1,4 +1,5 @@
 mod ollama;
+mod session;
 mod tools;
 
 use ollama::OllamaClient;
@@ -7,6 +8,9 @@ use tools::ToolCall;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
+
+mod workspace;
+use workspace::WorkspaceContext;
 
 #[derive(Parser, Debug)]
 #[command[author, version, about, long_about = None]]
@@ -54,7 +58,7 @@ pub struct Message {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let client = OllamaClient::new(args.model, args.server);
+    // let client = OllamaClient::new(args.model, args.server);
 
     let mut history = vec![Message {
         role: "system".to_string(),
@@ -73,50 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Welcome to Mini-Coding-Agent!");
     println!("Type 'exit' to quit.");
 
-    loop {
-        print!("\n> ");
-        io::stdout().flush()?;
-        let mut user_input = String::new();
-        io::stdin().read_line(&mut user_input)?;
-        let user_input = user_input.trim();
-        if user_input == "exit" {
-            break;
-        }
-
-        history.push(Message {
-            role: "user".to_string(),
-            content: user_input.to_string(),
-        });
-
-        for _ in 0..5 {
-            let response = client.chat(history.clone()).await?;
-            history.push(response.clone());
-
-            let content = response.content.trim();
-
-            if content.contains("<tool>") && content.contains("</tool>") {
-                let start = content.find("<tool>").unwrap() + 6;
-                let end = content.find("</tool>").unwrap();
-                let json_str = &content[start..end];
-
-                match serde_json::from_str::<ToolCall>(json_str) {
-                    Ok(tool_call) => {
-                        let result = tool_call.run();
-                        println!("[Tool Result] \n{}", result);
-                        history.push(Message {
-                            role: "user".to_string(),
-                            content: format!("Tool result: {}", result),
-                        });
-                    }
-                    Err(e) => {
-                        println!("[ERORR] Could not pars tool: {}", e);
-                        break;
-                    }
-                }
-            } else {
-                println!("\nAgent: {}", content);
-            }
-        }
-    }
+    let workspace = WorkspaceContext::build(".");
+    println!("{}", workspace.text());
     Ok(())
 }
