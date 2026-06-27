@@ -1,4 +1,3 @@
-use crate::Message;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
