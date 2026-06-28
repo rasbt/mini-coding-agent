@@ -155,16 +155,21 @@ impl MiniAgent {
             }
         }
 
-        let xml_re = Regex::new(r#"<tool\s+name=["']([^"']+)["'][^>]*>(.*?)<\/tool>"#).unwrap();
+        let xml_re = Regex::new(
+            r#"<tool\s+name=["']([^"']+)["'](?:\s+path=["']([^"']+)["'])?[^>]*>(.*?)<\/tool>"#,
+        )
+        .unwrap();
         if let Some(caps) = xml_re.captures(raw) {
             let name = caps.get(1).unwrap().as_str();
-            let body = caps.get(2).unwrap().as_str();
+            let path = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let body = caps.get(3).unwrap().as_str();
+
             if name == "write_file" || name == "patch_file" {
                 if let Some(content) = Self::extract(body, "content") {
                     let json = serde_json::json!({
                         "name": name,
                         "args": {
-                        "path": Self::extract(body, "path").unwrap_or(""),
+                        "path": path,
                         "content": content
 
                     }
