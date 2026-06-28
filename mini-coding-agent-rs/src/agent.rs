@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use crate::ollama::OllamaClient;
 use crate::session::{Session, SessionStore};
 use crate::tools::ApprovalPolicy;
@@ -136,6 +138,24 @@ impl MiniAgent {
         )
     }
 
+    pub fn approve(&self, payload: &str) -> bool {
+        match self.approval_policy {
+            ApprovalPolicy::Auto => true,
+            ApprovalPolicy::Never => false,
+            ApprovalPolicy::Ask => {
+                use std::io::{self, Write};
+                print!("Approve tool execution: {}? [y/N] ", payload);
+                let _ = io::stdout().flush();
+                let mut answer = String::new();
+                if io::stdin().read_line(&mut answer).is_ok() {
+                    let ans = answer.trim().to_lowercase();
+                    ans == "y" || ans == "yes"
+                } else {
+                    false
+                }
+            }
+        }
+    }
     pub fn extract<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
         let start_tag = format!("<{}>", tag);
         let end_tag = format!("</{}>", tag);
@@ -226,6 +246,23 @@ impl MiniAgent {
                         tool_steps += 1;
                         match serde_json::from_str::<crate::tools::ToolCall>(&payload) {
                             Ok(tool_call) => {
+                                // Check if the tool is risky
+                                let is_risky = matches!(
+                                    tool_call,
+                                    crate::tools::ToolCall::WriteFile { .. }
+                                        | crate::tools::ToolCall::PatchFile { .. }
+                                        | crate::tools::ToolCall::RunShell { .. }
+                                );
+
+                                if is_risky && !self.approve(&payload) {
+                                    self.session.history.push(SessionItem {
+                                        role: "assistant".to_string(),
+                                        content: "Runtime notice: tool execution denied by user. Reply with a different tool or final answer.".to_string(),
+                                        name: None, args: None, created_at: None,
+                                    });
+                                    continue;
+                                }
+
                                 let result = tool_call.run();
 
                                 self.session.history.push(SessionItem {
