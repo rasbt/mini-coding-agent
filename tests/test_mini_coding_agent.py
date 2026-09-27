@@ -189,6 +189,23 @@ def test_list_files_hides_internal_agent_state(tmp_path):
     assert "[F] hello.txt" in result
 
 
+def test_list_files_reports_truncation_and_supports_pagination(tmp_path):
+    agent = build_agent(tmp_path, [])
+    for index in range(203):
+        (tmp_path / f"item-{index:03}.txt").write_text("item\n", encoding="utf-8")
+
+    first_page = agent.run_tool("list_files", {})
+    assert "200 entries shown; 4 additional entries omitted" in first_page
+
+    wide_page = agent.run_tool("list_files", {"end": 400})
+    assert "[F] item-198.txt" in wide_page
+    assert "[F] item-200.txt" not in wide_page
+
+    next_page = agent.run_tool("list_files", {"start": 201, "end": 400})
+    assert "[F] item-202.txt" in next_page
+    assert "[F] item-000.txt" not in next_page
+
+
 def test_path_rejects_parent_escape(tmp_path):
     agent = build_agent(tmp_path, [])
 

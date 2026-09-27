@@ -282,9 +282,9 @@ class MiniAgent:
     def build_tools(self):
         tools = {
             "list_files": {
-                "schema": {"path": "str='.'"},
+                "schema": {"path": "str='.'", "start": "int=1", "end": "int=200"},
                 "risky": False,
-                "description": "List files in the workspace.",
+                "description": "List files in the workspace, up to 200 entries per page.",
                 "run": self.tool_list_files,
             },
             "read_file": {
@@ -540,6 +540,10 @@ class MiniAgent:
             path = self.path(args.get("path", "."))
             if not path.is_dir():
                 raise ValueError("path is not a directory")
+            start = int(args.get("start", 1))
+            end = int(args.get("end", 200))
+            if start < 1 or end < start:
+                raise ValueError("invalid entry range")
             return
 
         if name == "read_file":
@@ -743,14 +747,23 @@ class MiniAgent:
         path = self.path(args.get("path", "."))
         if not path.is_dir():
             raise ValueError("path is not a directory")
+        start = int(args.get("start", 1))
+        end = int(args.get("end", 200))
         entries = [
             item for item in sorted(path.iterdir(), key=lambda item: (item.is_file(), item.name.lower()))
             if item.name not in IGNORED_PATH_NAMES
         ]
+        page_end = min(end, start + 199)
         lines = []
-        for entry in entries[:200]:
+        for entry in entries[start - 1 : page_end]:
             kind = "[D]" if entry.is_dir() else "[F]"
             lines.append(f"{kind} {entry.relative_to(self.root)}")
+        if page_end < len(entries):
+            display_path = str(path.relative_to(self.root))
+            lines.append(
+                f"... {page_end - start + 1} entries shown; {len(entries) - page_end} additional entries omitted. "
+                f"Call list_files with path='{display_path}', start={page_end + 1}, end={page_end + 200} to continue."
+            )
         return "\n".join(lines) or "(empty)"
 
     def tool_read_file(self, args):
