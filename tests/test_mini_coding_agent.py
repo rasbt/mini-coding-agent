@@ -1,4 +1,5 @@
 import json
+import subprocess
 import pytest
 from unittest.mock import patch
 
@@ -28,6 +29,94 @@ def build_agent(tmp_path, outputs, **kwargs):
         approval_policy=approval_policy,
         **kwargs,
     )
+
+
+@pytest.fixture
+def git_workspace(tmp_path):
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(".mini-coding-agent/\n", encoding="utf-8")
+    for args in (
+        ["init"],
+        ["add", "."],
+        ["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+         "-c", "commit.gpgsign=false", "commit", "-m", "initial"],
+    ):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    return tmp_path
+
+
+def workspace_in_prompt(prompt):
+    return prompt.split("Workspace:\n", 1)[1].split("\n\nMemory:", 1)[0]
+
+
+@pytest.mark.parametrize("name,args", [
+    ("write_file", {"path": "README.md", "content": "updated\n"}),
+    ("patch_file", {"path": "README.md", "old_text": "demo", "new_text": "updated"}),
+    ("run_shell", {"command": "echo updated>README.md"}),
+])
+def test_workspace_refresh_after_mutating_tool(git_workspace, name, args):
+    agent = build_agent(git_workspace, [
+        "<tool>" + json.dumps({"name": name, "args": args}) + "</tool>",
+        "<final>Done.</final>",
+    ])
+    prefix = agent.prefix
+    with patch.object(agent.model_client, "complete", wraps=agent.model_client.complete) as complete:
+        assert agent.ask("Update the documentation") == "Done."
+
+    before, after = [workspace_in_prompt(call.args[0]) for call in complete.call_args_list]
+    assert "- status:\nclean\n" in before
+    assert "- README.md\ndemo\n" in before
+    assert "M README.md" in after
+    assert "- README.md\nupdated" in after
+    assert "- README.md\ndemo\n" not in after
+    assert agent.prefix == prefix
+
+
+def test_workspace_refresh_after_shell_changes_git_state(git_workspace):
+    command = (
+        'git checkout -b refreshed-branch && git -c user.name=Test '
+        '-c user.email=test@example.invalid -c commit.gpgsign=false '
+        'commit --allow-empty -m refreshed-commit'
+    )
+    agent = build_agent(git_workspace, [
+        "<tool>" + json.dumps({"name": "run_shell", "args": {"command": command}}) + "</tool>",
+        "<final>Done.</final>",
+    ])
+    with patch.object(agent.model_client, "complete", wraps=agent.model_client.complete) as complete:
+        agent.ask("Update the git state")
+    after = workspace_in_prompt(complete.call_args_list[-1].args[0])
+    assert "- branch: refreshed-branch\n" in after
+    assert "refreshed-commit" in after
+
+
+def test_workspace_refresh_after_partial_tool_failure(tmp_path):
+    agent = build_agent(tmp_path, [])
+
+    def partial_write(args):
+        (tmp_path / "README.md").write_text("partial update\n", encoding="utf-8")
+        raise RuntimeError("synthetic failure after mutation")
+
+    agent.tools["write_file"]["run"] = partial_write
+    result = agent.run_tool("write_file", {"path": "README.md", "content": "unused"})
+    assert "synthetic failure after mutation" in result
+    assert "- README.md\npartial update\n" in workspace_in_prompt(agent.prompt("Continue"))
+
+
+@pytest.mark.parametrize("name,args,policy", [
+    ("read_file", {"path": "README.md"}, "auto"),
+    ("write_file", {"path": "README.md", "content": "denied"}, "never"),
+    ("write_file", {"path": "README.md"}, "auto"),
+])
+def test_workspace_not_refreshed_without_executed_mutation(tmp_path, name, args, policy):
+    agent = build_agent(tmp_path, [], approval_policy=policy)
+    before = workspace_in_prompt(agent.prompt("Inspect"))
+    with patch.object(WorkspaceContext, "build", wraps=WorkspaceContext.build) as build:
+        result = agent.run_tool(name, args)
+        assert workspace_in_prompt(agent.prompt("Continue")) == before
+    build.assert_not_called()
+    if policy == "never":
+        assert "approval denied" in result
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "demo\n"
 
 
 def test_agent_runs_tool_then_final(tmp_path):

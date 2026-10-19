@@ -238,6 +238,7 @@ class MiniAgent:
     ):
         self.model_client = model_client
         self.workspace = workspace
+        self.workspace_dirty = False
         self.root = Path(workspace.repo_root)
         self.session_store = session_store
         self.approval_policy = approval_policy
@@ -370,7 +371,6 @@ class MiniAgent:
             "Rules:\n" + rules,
             "Tools:\n" + tool_text,
             "Valid response examples:\n" + examples,
-            self.workspace.text(),
         ])
 
     def memory_text(self):
@@ -420,8 +420,12 @@ class MiniAgent:
     #### 2) Prompt Shape And Cache Reuse (Continued) #######
     ########################################################
     def prompt(self, user_message):
+        if self.workspace_dirty:
+            self.workspace = WorkspaceContext.build(self.workspace.cwd)
+            self.workspace_dirty = False
         return "\n\n".join([
             self.prefix,
+            self.workspace.text(),
             self.memory_text(),
             "Transcript:\n" + self.history_text(),
             "Current user request:\n" + user_message,
@@ -513,6 +517,10 @@ class MiniAgent:
             return clip(tool["run"](args))
         except Exception as exc:
             return f"error: tool {name} failed: {exc}"
+        finally:
+            # A tool can change files before failing (for example, a shell timeout).
+            if name in {"write_file", "patch_file", "run_shell"}:
+                self.workspace_dirty = True
 
     def repeated_tool_call(self, name, args):
         tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
