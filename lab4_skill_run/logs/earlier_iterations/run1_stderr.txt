@@ -1,0 +1,4 @@
+[skills] discovered 2 skill(s): pr-review, vacuum-world-agent
+[skills] prompt: 'Solve Lab 4: implement the agent described in spec.md so that the tests in Test/ pass.'
+[skills] similarity (threshold 0.20): vacuum-world-agent=0.590, pr-review=0.011 -> selected: vacuum-world-agent
+[skills] executing skill 'vacuum-world-agent' (trigger=auto, score=0.590) from /Users/austinburt/Documents/Code/PythonEnv/Python/CS440/Project2-MiniCodingAgent-CS440/skills/vacuum-world-agent/SKILL.md

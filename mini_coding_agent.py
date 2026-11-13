@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -12,7 +13,7 @@ from pathlib import Path
 
 
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
-HELP_TEXT = "/help, /memory, /session, /reset, /exit"
+HELP_TEXT = "/help, /memory, /session, /skills, /skill, /reset, /exit"
 WELCOME_ART = (
     "/\\     /\\\\",
     "{  `---'  }",
@@ -27,6 +28,8 @@ HELP_DETAILS = "\n".join(
         "/help    Show this help message.",
         "/memory  Show the agent's distilled working memory.",
         "/session Show the path to the saved session file.",
+        "/skills  List the agent skills that were discovered.",
+        "/skill <name> <request>  Run a request with a specific skill.",
         "/reset   Clear the current session history and memory.",
         "/exit    Exit the agent.",
     ]
@@ -44,6 +47,7 @@ IGNORED_PATH_NAMES = {".git", ".mini-coding-agent", "__pycache__", ".pytest_cach
 # 4) Context Reduction And Output Management -> clip, history_text
 # 5) Transcripts, Memory, And Resumption -> SessionStore, record, note_tool, ask, reset
 # 6) Delegation And Bounded Subagents -> tool_delegate
+# 7) Agent Skills -> Skill, SkillRegistry, SkillLogger, select_skill, activate_skill, tool_use_skill
 
 
 def now():
@@ -222,6 +226,247 @@ class OllamaModelClient:
         return data.get("response", "")
 
 
+##############################
+#### 7) Agent Skills #########
+##############################
+# A skill is a folder with a SKILL.md file (front matter + instructions).
+# The registry discovers skills, scores them against a prompt with a
+# stdlib-only TF-IDF + trigger-phrase similarity check, and the agent injects
+# the selected skill's instructions into the prompt. Every step is logged.
+SKILL_FILE = "SKILL.md"
+SKILL_DIR_NAMES = ("skills", "skill")
+SKILL_THRESHOLD = 0.20
+SKILL_BODY_LIMIT = 6000
+SKILL_FILE_LIMIT = 9000
+SKILL_CONTEXT_LIMIT = 20000
+STOP_WORDS = frozenset(
+    """a an and are as at be by can do does for from has have how i in into is it its me my of on or
+    our please should so that the their them then there these this to us use using want we what when
+    which will with would you your"""
+    .split()
+)
+
+
+class Skill:
+    def __init__(self, name, description, triggers, body, path, context=(), resources=()):
+        self.name = name
+        self.description = description
+        self.triggers = triggers
+        self.body = body
+        self.path = Path(path)
+        self.context = list(context)  # workspace files / globs to preload
+        self.resources = list(resources)  # files inside the skill folder to preload
+
+    @property
+    def directory(self):
+        return self.path.parent
+
+    def document(self):
+        # Text used for the similarity check; triggers count twice.
+        triggers = " ".join(self.triggers)
+        return " ".join([self.name.replace("-", " "), self.description, triggers, triggers])
+
+
+def parse_skill_file(path):
+    path = Path(path)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    meta = {}
+    body = text
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for index in range(1, len(lines)):
+            if lines[index].strip() == "---":
+                for line in lines[1:index]:
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        meta[key.strip().lower()] = value.strip().strip("\"'")
+                body = "\n".join(lines[index + 1:])
+                break
+    name = meta.get("name") or path.parent.name
+    description = meta.get("description", "").strip()
+    if not description:
+        raise ValueError("missing description in front matter")
+    def items(key):
+        return [item.strip() for item in meta.get(key, "").split(",") if item.strip()]
+
+    return Skill(
+        name=name,
+        description=description,
+        triggers=items("triggers"),
+        body=body.strip(),
+        path=path,
+        context=items("context"),
+        resources=items("resources"),
+    )
+
+
+def tokenize(text):
+    tokens = []
+    for word in re.findall(r"[a-z0-9]+", str(text).lower()):
+        if len(word) < 2 or word in STOP_WORDS:
+            continue
+        for suffix in ("ing", "ed", "es", "s"):
+            if len(word) > len(suffix) + 2 and word.endswith(suffix):
+                word = word[: -len(suffix)]
+                break
+        tokens.append(word)
+    return tokens
+
+
+class SkillLogger:
+    def __init__(self, path=None, echo=True, stream=None):
+        self.path = Path(path) if path else None
+        self.echo = echo
+        self.stream = stream
+        self.session_id = None
+        self.events = []
+        if self.path:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def log(self, event, **fields):
+        entry = {"ts": now(), "session_id": self.session_id, "event": event, **fields}
+        self.events.append(entry)
+        if self.path:
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, default=str) + "\n")
+        if self.echo:
+            print(f"[skills] {self.describe(entry)}", file=self.stream or sys.stderr)
+        return entry
+
+    @staticmethod
+    def describe(entry):
+        event = entry["event"]
+        if event == "prompt":
+            return f"prompt: {middle(entry['prompt'], 120)!r}"
+        if event == "similarity_check":
+            scores = ", ".join(f"{item['skill']}={item['score']:.3f}" for item in entry["scores"]) or "no skills"
+            return f"similarity (threshold {entry['threshold']:.2f}): {scores} -> selected: {entry['selected'] or 'none'}"
+        if event == "skill_executed":
+            score = "-" if entry.get("score") is None else f"{entry['score']:.3f}"
+            files = ", ".join(entry.get("loaded_files") or []) or "-"
+            return (
+                f"executing skill '{entry['skill']}' (trigger={entry['trigger']}, score={score}) "
+                f"from {entry['path']}; loaded files: {files}"
+            )
+        if event == "discover":
+            return f"discovered {len(entry['skills'])} skill(s): {', '.join(entry['skills']) or '-'}"
+        if event == "skill_not_found":
+            return f"skill '{entry['requested']}' not found; available: {', '.join(entry['available']) or '-'}"
+        return json.dumps(entry, default=str)
+
+
+class SkillRegistry:
+    def __init__(self, skills=None, threshold=SKILL_THRESHOLD, logger=None):
+        self.skills = {}
+        for skill in skills or []:
+            self.skills.setdefault(skill.name, skill)
+        self.threshold = threshold
+        self.logger = logger or SkillLogger(echo=False)
+
+    @staticmethod
+    def default_roots(workspace, extra_dirs=()):
+        roots = [Path(item) for item in extra_dirs]
+        for base in (Path(workspace.repo_root), Path(workspace.cwd), Path(__file__).resolve().parent):
+            roots.extend(base / name for name in SKILL_DIR_NAMES)
+        unique = []
+        for root in roots:
+            resolved = root.resolve()
+            if resolved not in unique:
+                unique.append(resolved)
+        return unique
+
+    @classmethod
+    def discover(cls, roots, threshold=SKILL_THRESHOLD, logger=None):
+        logger = logger or SkillLogger(echo=False)
+        skills, skipped = [], []
+        seen = set()
+        for root in roots:
+            root = Path(root)
+            if not root.is_dir():
+                continue
+            for folder in sorted(item for item in root.iterdir() if item.is_dir()):
+                skill_file = folder / SKILL_FILE
+                if not skill_file.is_file():
+                    continue
+                try:
+                    skill = parse_skill_file(skill_file)
+                except Exception as exc:
+                    skipped.append({"path": str(skill_file), "reason": str(exc)})
+                    continue
+                if skill.name in seen:
+                    continue
+                seen.add(skill.name)
+                skills.append(skill)
+        registry = cls(skills, threshold=threshold, logger=logger)
+        logger.log(
+            "discover",
+            roots=[str(root) for root in roots],
+            skills=[skill.name for skill in skills],
+            skipped=skipped,
+        )
+        return registry
+
+    def get(self, name):
+        return self.skills.get(str(name).strip())
+
+    def catalogue(self):
+        return "\n".join(f"- {skill.name}: {skill.description}" for skill in self.skills.values())
+
+    def scores(self, prompt):
+        skills = list(self.skills.values())
+        if not skills:
+            return []
+        docs = [tokenize(skill.document()) for skill in skills]
+        count = len(docs)
+        df = {}
+        for doc in docs:
+            for token in set(doc):
+                df[token] = df.get(token, 0) + 1
+
+        def vector(tokens):
+            vec = {}
+            for token in tokens:
+                vec[token] = vec.get(token, 0) + 1
+            return {
+                token: tf * (math.log((count + 1) / (df.get(token, 0) + 1)) + 1)
+                for token, tf in vec.items()
+            }
+
+        query = vector(tokenize(prompt))
+        query_norm = math.sqrt(sum(value * value for value in query.values()))
+        lowered = str(prompt).lower()
+        results = []
+        for skill, doc in zip(skills, docs):
+            vec = vector(doc)
+            norm = math.sqrt(sum(value * value for value in vec.values()))
+            dot = sum(value * vec.get(token, 0.0) for token, value in query.items())
+            cosine = dot / (query_norm * norm) if query_norm and norm else 0.0
+            hits = [phrase for phrase in skill.triggers if phrase.lower() in lowered]
+            score = 0.6 * cosine + 0.4 * (1.0 if hits else 0.0)
+            results.append({
+                "skill": skill.name,
+                "score": round(score, 4),
+                "cosine": round(cosine, 4),
+                "trigger_hits": hits,
+            })
+        results.sort(key=lambda item: item["score"], reverse=True)
+        return results
+
+    def match(self, prompt):
+        results = self.scores(prompt)
+        best = results[0] if results and results[0]["score"] >= self.threshold else None
+        self.logger.log(
+            "similarity_check",
+            prompt=prompt,
+            threshold=self.threshold,
+            scores=results,
+            selected=best["skill"] if best else None,
+        )
+        if not best:
+            return None, None
+        return self.skills[best["skill"]], best["score"]
+
+
 class MiniAgent:
     def __init__(
         self,
@@ -235,8 +480,10 @@ class MiniAgent:
         depth=0,
         max_depth=1,
         read_only=False,
+        skills=None,
     ):
         self.model_client = model_client
+        self.skills = skills
         self.workspace = workspace
         self.root = Path(workspace.repo_root)
         self.session_store = session_store
@@ -253,6 +500,9 @@ class MiniAgent:
             "history": [],
             "memory": {"task": "", "files": [], "notes": []},
         }
+        self.session.setdefault("active_skill", None)
+        if self.skills is not None:
+            self.skills.logger.session_id = self.session["id"]
         self.tools = self.build_tools()
         self.prefix = self.build_prefix()
         self.session_path = self.session_store.save(self.session)
@@ -318,6 +568,13 @@ class MiniAgent:
                 "run": self.tool_patch_file,
             },
         }
+        if self.skills and self.skills.skills:
+            tools["use_skill"] = {
+                "schema": {"name": "str"},
+                "risky": False,
+                "description": "Load an agent skill's step-by-step instructions when the task needs it.",
+                "run": self.tool_use_skill,
+            }
         if self.depth < self.max_depth:
             tools["delegate"] = {
                 "schema": {"task": "str", "max_steps": "int=3"},
@@ -365,13 +622,19 @@ class MiniAgent:
             "- Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.",
             "- Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or delegate with args={}.",
         ])
-        return "\n\n".join([
+        sections = [
             "You are Mini-Coding-Agent, a small local coding agent running through Ollama.",
             "Rules:\n" + rules,
             "Tools:\n" + tool_text,
             "Valid response examples:\n" + examples,
-            self.workspace.text(),
-        ])
+        ]
+        if self.skills and self.skills.skills:
+            sections.append(
+                "Agent skills (call use_skill with the name when a task needs one; "
+                "an active skill's instructions take priority):\n" + self.skills.catalogue()
+            )
+        sections.append(self.workspace.text())
+        return "\n\n".join(sections)
 
     def memory_text(self):
         memory = self.session["memory"]
@@ -420,12 +683,123 @@ class MiniAgent:
     #### 2) Prompt Shape And Cache Reuse (Continued) #######
     ########################################################
     def prompt(self, user_message):
-        return "\n\n".join([
-            self.prefix,
-            self.memory_text(),
-            "Transcript:\n" + self.history_text(),
-            "Current user request:\n" + user_message,
-        ])
+        sections = [self.prefix, self.memory_text()]
+        skill_text = self.skill_text()
+        if skill_text:
+            sections.append(skill_text)
+        sections.append("Transcript:\n" + self.history_text())
+        sections.append("Current user request:\n" + user_message)
+        return "\n\n".join(sections)
+
+    ##############################
+    #### 7) Agent Skills #########
+    ##############################
+    def skill_text(self):
+        active = self.session.get("active_skill")
+        if not active or not self.skills:
+            return ""
+        skill = self.skills.get(active["name"])
+        if skill is None:
+            return ""
+        directory = skill.directory
+        try:
+            directory = directory.relative_to(self.root)
+        except ValueError:
+            pass
+        lines = [
+            f"Active skill: {skill.name}",
+            f"- skill directory: {directory}",
+            "- Follow these instructions step by step. They override general habits.",
+            "Skill instructions:",
+            clip(skill.body, SKILL_BODY_LIMIT),
+        ]
+        files = self.skill_files(skill)
+        if files:
+            lines.append("Skill files (already loaded in full; do not re-read them with read_file):")
+            for label, text in files:
+                lines.append(f"<file path=\"{label}\">\n{text}\n</file>")
+        return "\n".join(lines)
+
+    def skill_files(self, skill):
+        # Loads the skill's declared workspace context files and bundled resources.
+        loaded, budget = [], SKILL_CONTEXT_LIMIT
+        candidates = []
+        for pattern in skill.context:
+            matches = sorted(self.root.glob(pattern)) if any(ch in pattern for ch in "*?[") else [self.root / pattern]
+            for path in matches:
+                try:
+                    path = self.path(path)
+                except ValueError:
+                    continue
+                if path.is_file() and not any(part in IGNORED_PATH_NAMES for part in path.relative_to(self.root).parts):
+                    candidates.append((str(path.relative_to(self.root)), path))
+        for name in skill.resources:
+            path = (skill.directory / name).resolve()
+            if path.is_file() and skill.directory.resolve() in path.parents:
+                candidates.append((f"{skill.name}/{name}", path))
+        for label, path in candidates:
+            if budget <= 0:
+                break
+            text = clip(path.read_text(encoding="utf-8", errors="replace"), min(SKILL_FILE_LIMIT, budget))
+            budget -= len(text)
+            loaded.append((label, text))
+        return loaded
+
+    def activate_skill(self, skill, trigger, score=None):
+        self.session["active_skill"] = {
+            "name": skill.name,
+            "trigger": trigger,
+            "score": score,
+            "path": str(skill.path),
+        }
+        self.skills.logger.log(
+            "skill_executed",
+            skill=skill.name,
+            trigger=trigger,
+            score=score,
+            path=str(skill.path),
+            loaded_files=[label for label, _ in self.skill_files(skill)],
+        )
+        detail = f"score {score:.3f}" if score is not None else "no score"
+        self.record({
+            "role": "skill",
+            "content": f"activated skill '{skill.name}' (trigger={trigger}, {detail})",
+            "created_at": now(),
+        })
+
+    def select_skill(self, user_message):
+        # Returns the request text with any explicit "/skill <name>" prefix removed.
+        self.session["active_skill"] = None
+        if not self.skills or not self.skills.skills:
+            return user_message
+        self.skills.logger.log("prompt", prompt=user_message)
+        match = re.match(r"^/skill\s+(\S+)\s*(.*)$", user_message.strip(), re.S)
+        if match:
+            name, rest = match.group(1), match.group(2).strip()
+            skill = self.skills.get(name)
+            if skill is None:
+                self.skills.logger.log("skill_not_found", requested=name, available=list(self.skills.skills))
+            else:
+                self.activate_skill(skill, "explicit")
+                return rest or skill.description
+        skill, score = self.skills.match(user_message)
+        if skill is not None:
+            self.activate_skill(skill, "auto", score)
+        return user_message
+
+    def tool_use_skill(self, args):
+        name = str(args.get("name", "")).strip()
+        skill = self.skills.get(name) if self.skills else None
+        if skill is None:
+            available = list(self.skills.skills) if self.skills else []
+            if self.skills:
+                self.skills.logger.log("skill_not_found", requested=name, available=available)
+            raise ValueError(f"unknown skill '{name}'; available: {', '.join(available) or '-'}")
+        active = self.session.get("active_skill")
+        if active and active["name"] == skill.name:
+            return f"skill '{skill.name}' is already active; follow the Active skill instructions."
+        self.activate_skill(skill, "tool")
+        return f"skill '{skill.name}' activated; its instructions are now in the Active skill section of the prompt."
 
     ###############################################
     #### 5) Session Memory (Continued) ###########
@@ -447,6 +821,7 @@ class MiniAgent:
         if not memory["task"]:
             memory["task"] = clip(user_message.strip(), 300)
         self.record({"role": "user", "content": user_message, "created_at": now()})
+        user_message = self.select_skill(user_message)
 
         tool_steps = 0
         attempts = 0
@@ -530,6 +905,7 @@ class MiniAgent:
             "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
             "patch_file": '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
             "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
+            "use_skill": '<tool>{"name":"use_skill","args":{"name":"pr-review"}}</tool>',
         }
         return examples.get(name, "")
 
@@ -589,6 +965,11 @@ class MiniAgent:
             count = text.count(old_text)
             if count != 1:
                 raise ValueError(f"old_text must occur exactly once, found {count}")
+            return
+
+        if name == "use_skill":
+            if not str(args.get("name", "")).strip():
+                raise ValueError("name must not be empty")
             return
 
         if name == "delegate":
@@ -670,7 +1051,7 @@ class MiniAgent:
 
         body = match.group("body")
         args = dict(attrs)
-        for key in ("content", "old_text", "new_text", "command", "task", "pattern", "path"):
+        for key in ("content", "old_text", "new_text", "command", "task", "pattern", "path", "name"):
             if f"<{key}>" in body:
                 args[key] = MiniAgent.extract_raw(body, key)
 
@@ -717,6 +1098,7 @@ class MiniAgent:
     def reset(self):
         self.session["history"] = []
         self.session["memory"] = {"task": "", "files": [], "notes": []}
+        self.session["active_skill"] = None
         self.session_store.save(self.session)
 
     def path_is_within_root(self, resolved):
@@ -909,9 +1291,18 @@ def build_welcome(agent, model, host):
     return "\n".join([line, *rows, line])
 
 
+def build_skills(args, workspace):
+    if getattr(args, "no_skills", False):
+        return None
+    logger = SkillLogger(Path(workspace.repo_root) / ".mini-coding-agent" / "logs" / "skills.jsonl")
+    roots = SkillRegistry.default_roots(workspace, getattr(args, "skills_dir", None) or [])
+    return SkillRegistry.discover(roots, threshold=args.skill_threshold, logger=logger)
+
+
 def build_agent(args):
     workspace = WorkspaceContext.build(args.cwd)
     store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
+    skills = build_skills(args, workspace)
     model = OllamaModelClient(
         model=args.model,
         host=args.host,
@@ -931,6 +1322,7 @@ def build_agent(args):
             approval_policy=args.approval,
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
+            skills=skills,
         )
     return MiniAgent(
         model_client=model,
@@ -939,6 +1331,7 @@ def build_agent(args):
         approval_policy=args.approval,
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
+        skills=skills,
     )
 
 
@@ -963,6 +1356,9 @@ def build_arg_parser():
     parser.add_argument("--max-new-tokens", type=int, default=512, help="Maximum model output tokens per step.")
     parser.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature sent to Ollama.")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling value sent to Ollama.")
+    parser.add_argument("--skills-dir", action="append", default=[], help="Extra folder of skills (repeatable).")
+    parser.add_argument("--skill-threshold", type=float, default=SKILL_THRESHOLD, help="Minimum similarity score to auto-activate a skill.")
+    parser.add_argument("--no-skills", action="store_true", help="Disable the agent skills component.")
     return parser
 
 
@@ -1002,6 +1398,9 @@ def main(argv=None):
             continue
         if user_input == "/session":
             print(agent.session_path)
+            continue
+        if user_input == "/skills":
+            print(agent.skills.catalogue() if agent.skills and agent.skills.skills else "no skills found")
             continue
         if user_input == "/reset":
             agent.reset()

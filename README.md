@@ -49,6 +49,52 @@ This coding harness is organized around six practical building blocks:
    Scoped subtasks can be delegated to helper agents that inherit enough context to help (but operate within limits).
 
 &nbsp;
+## Component 7: Agent Skills (CS440 addition)
+
+7. **Agent skills**
+   Reusable, folder-based instructions. Each skill is a folder with a `SKILL.md`
+   (front matter `name`, `description`, `triggers`, optional `context` / `resources`
+   files to preload, + step-by-step instructions).
+   The agent discovers them, runs a similarity check on every prompt, and injects
+   the selected skill's instructions into the prompt. The model can also load a
+   skill mid-task with the `use_skill` tool, and the user can force one with
+   `/skill <name> <request>`.
+
+```
+skills/
+├── pr-review/SKILL.md
+└── vacuum-world-agent/          # Lab 5 skill
+    ├── SKILL.md
+    └── reference.md
+```
+
+Skills are searched in `--skills-dir`, `<repo>/skills`, `<repo>/skill`,
+`<cwd>/skills`, `<cwd>/skill`, and the `skills/` folder next to
+`mini_coding_agent.py`.
+
+**Similarity check:** TF-IDF cosine between the prompt and each skill's
+name/description/triggers, plus a bonus when a trigger phrase appears verbatim:
+`score = 0.6 * cosine + 0.4 * trigger_hit`. The best skill is used if
+`score >= --skill-threshold` (default `0.20`).
+
+**Logging:** every prompt, similarity check (all scores) and executed skill is
+written to `.mini-coding-agent/logs/skills.jsonl` and echoed to stderr:
+
+```
+[skills] discovered 2 skill(s): pr-review, vacuum-world-agent
+[skills] prompt: 'Solve Lab 4: implement the agent described in spec.md ...'
+[skills] similarity (threshold 0.20): vacuum-world-agent=0.590, pr-review=0.011 -> selected: vacuum-world-agent
+[skills] executing skill 'vacuum-world-agent' (trigger=auto, score=0.590) from .../skills/vacuum-world-agent/SKILL.md; loaded files: spec.md, Test/test.py, vacuum-world-agent/reference.md
+```
+
+Flags: `--skills-dir PATH` (repeatable), `--skill-threshold FLOAT`, `--no-skills`.
+REPL: `/skills`, `/skill <name> <request>`.
+
+The SDLC documents for this component are in [`sdlc/`](sdlc/)
+(intent → spec → plan → tests → verification), and the Lab 4 run that used
+the Lab 5 skill is recorded in [`lab4_skill_run/`](lab4_skill_run/).
+
+&nbsp;
 ## Requirements
 
 You need:
