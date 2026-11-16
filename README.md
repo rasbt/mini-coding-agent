@@ -1,3 +1,26 @@
+# Project 2: Agent Skills Component for mini-coding-agent
+Group 11: Catrina Coons, Yulisa Medrano
+
+
+mini-coding-agent already has five of the six coding-agent components from class. This 
+fork adds the missing one: agent skills. The agent finds skill folders such as skills/
+reward-design/SKILL.md, checks each request against them using keyword similarity, loads 
+the best match into its prompt, and can also load a skill on its own during a task. Every 
+prompt, similarity check and executed skill is logged. We demonstrate it by having the 
+agent build and train a Q-learning vacuum robot (the Lab).
+
+## SDLC documents
+
+intent.md - The problem, the desired outcome, constraints, open questions
+spec.md - Numbered requirements R1–R21, the design, areas of concern
+plan.md - Files that change, order of work (citing R#), risks, proof
+
+## How the skills componenet works
+
+[TODO]
+
+### Requirements are unchanged from original Mini-Coding_Agent directions
+
 &nbsp;
 # Mini-Coding-Agent
 
