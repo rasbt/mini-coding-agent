@@ -1,5 +1,19 @@
 # Plan: Agent Skills for `mini_coding_agent.py`
 
+## Implementation status
+
+The implementation uses the existing agent loop. It searches `skills/`,
+`skill/`, and `.claude/skills/`, uses word-count cosine similarity with a
+0.25 threshold, and supports explicit selection by name from both prompts
+and the `use_skill` tool. It appends JSON Lines to
+`.mini-coding-agent/skills.log`. The design proposal below records the
+original plan. The README documents the implemented behavior and demo steps.
+
+For the demonstration, prepare a disposable Lab 5 checkout with five
+Q-learning TODOs. Use the original `check-vacuum` skill to guide the agent's
+attempt on the vacuum robot problem. Verify the prompt, selection, and
+activation records, then inspect the actual edits and verification output.
+
 Derived from `spec.md` and a read of `mini_coding_agent.py` (1,019 lines, stdlib-only, Ollama backend, `MiniAgent` with six numbered components).
 
 ## 1. Goal

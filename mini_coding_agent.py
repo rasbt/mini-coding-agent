@@ -325,7 +325,7 @@ class SkillRegistry:
         """Return (best_skill_or_None, scores, trigger). An explicit /skill-name always wins."""
         lowered = str(prompt).lower()
         for name, skill in self.skills.items():
-            if f"/{name.lower()}" in lowered:
+            if re.search(rf"(?<![\w/])/{re.escape(name.lower())}(?![\w/-])", lowered):
                 return skill, {name: 1.0}, "explicit"
         scores = {name: self.similarity(prompt, skill) for name, skill in self.skills.items()}
         if not scores:
@@ -509,8 +509,8 @@ class MiniAgent:
             "- New files should be complete and runnable, including obvious imports.",
             "- Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.",
             "- Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or delegate with args={}.",
-            "- If an Active skill section is present, follow its instructions step by step.",
-            "- If the task needs one of the listed skills and none is active, call use_skill with its name.",
+            "- Follow the active skill using the listed tools. Continue from steps already completed in the transcript.",
+            "- Skill names are not tools. Use use_skill only to load a skill that is not already active.",
         ])
         return "\n\n".join([
             "You are Mini-Coding-Agent, a small local coding agent running through Ollama.",
@@ -589,13 +589,23 @@ class MiniAgent:
             clip(skill.body, 3000),
         ])
 
-    def select_skill(self, user_message):
+    def select_skill(self, user_message, *, requested_name=None):
         """Log the prompt, run the similarity check, and activate the best skill if it passes."""
-        self.skill_log.write("prompt", session=self.session["id"], prompt=user_message)
-        skill, scores, trigger = self.skills.match(user_message)
+        source = "prompt" if requested_name is None else "tool"
+        self.skill_log.write(
+            "prompt", session=self.session["id"], depth=self.depth, source=source, prompt=user_message,
+        )
+        if requested_name is None:
+            skill, scores, trigger = self.skills.match(user_message)
+        else:
+            skill = self.skills.skills[requested_name]
+            scores, trigger = {skill.name: 1.0}, "explicit"
         self.skill_log.write(
             "similarity_check",
             session=self.session["id"],
+            depth=self.depth,
+            source=source,
+            method="exact_name" if trigger == "explicit" else "word_count_cosine",
             scores=scores,
             threshold=self.skills.threshold,
             best=max(scores, key=scores.get) if scores else None,
@@ -604,18 +614,19 @@ class MiniAgent:
         score_text = ", ".join(f"{name}={score}" for name, score in sorted(scores.items(), key=lambda kv: -kv[1]))
         print(f"[skills] similarity: {score_text or 'no skills found'} (threshold {self.skills.threshold})", file=sys.stderr)
         if skill:
-            self.activate_skill(skill, trigger, scores.get(skill.name))
+            self.activate_skill(skill, "tool" if source == "tool" else trigger, scores[skill.name])
         else:
             print("[skills] no skill selected", file=sys.stderr)
         return skill
 
-    def activate_skill(self, skill, trigger, score=None):
+    def activate_skill(self, skill, trigger, score):
         self.active_skill = skill
-        self.remember(self.session["memory"]["notes"], f"active skill: {skill.name}", 5)
         self.skill_log.write(
             "skill_executed",
             session=self.session["id"],
+            depth=self.depth,
             skill=skill.name,
+            description=skill.description,
             trigger=trigger,
             score=score,
             path=str(skill.path.relative_to(self.root)),
@@ -624,11 +635,10 @@ class MiniAgent:
 
     def tool_use_skill(self, args):
         name = str(args.get("name", "")).strip()
-        skill = self.skills.skills.get(name)
-        if skill is None:
-            raise ValueError(f"unknown skill '{name}'")
-        self.activate_skill(skill, "tool")
-        return f"skill '{skill.name}' loaded. Follow these instructions:\n{skill.body}"
+        if self.active_skill and self.active_skill.name == name:
+            return f"skill '{name}' is already active. Continue from the completed steps in the transcript."
+        skill = self.select_skill(name, requested_name=name)
+        return f"skill '{skill.name}' loaded. Follow its Active skill instructions."
 
     ###############################################
     #### 5) Session Memory (Continued) ###########
@@ -649,6 +659,8 @@ class MiniAgent:
         memory = self.session["memory"]
         if not memory["task"]:
             memory["task"] = clip(user_message.strip(), 300)
+        self.active_skill = None
+        memory["notes"][:] = [note for note in memory["notes"] if not note.startswith("active skill: ")]
         self.record({"role": "user", "content": user_message, "created_at": now()})
         self.select_skill(user_message)
 
@@ -719,6 +731,18 @@ class MiniAgent:
             return f"error: tool {name} failed: {exc}"
 
     def repeated_tool_call(self, name, args):
+        workspace_tools = {"run_shell", "patch_file", "write_file"}
+        if name in workspace_tools:
+            for item in reversed(self.session["history"]):
+                if item["role"] == "user":
+                    break
+                if item["role"] != "tool":
+                    continue
+                if item["name"] == name and item["args"] == args:
+                    return True
+                if item["name"] in workspace_tools and not item["content"].startswith("error:"):
+                    break
+            return False
         tool_events = [item for item in self.session["history"] if item["role"] == "tool"]
         if len(tool_events) < 2:
             return False
@@ -1228,6 +1252,8 @@ def main(argv=None):
         print()
         try:
             print(agent.ask(user_input))
+        except KeyboardInterrupt:
+            print("\nTurn interrupted.")
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
 

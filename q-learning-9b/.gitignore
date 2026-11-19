@@ -1,0 +1,4 @@
+.mini-coding-agent/
+__pycache__/
+.venv/
+.ipynb_checkpoints/

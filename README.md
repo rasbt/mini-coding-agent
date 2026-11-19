@@ -27,13 +27,13 @@ The model backend is currently based on Ollama.
 
 
 &nbsp;
-## Six Core Components
+## Seven Components
 
 <a href="https://magazine.sebastianraschka.com/p/components-of-a-coding-agent">
   <img alt="Six core components of a coding agent" src="https://sebastianraschka.com/images/github/mini-coding-agent/six-components.webp" width="500px">
 </a>
 
-This coding harness is organized around six practical building blocks:
+This coding harness is organized around seven components:
 
 1. **Live repo context**  
    The agent collects stable workspace facts upfront, such as repo layout, instructions, and git state.
@@ -47,6 +47,90 @@ This coding harness is organized around six practical building blocks:
    The runtime keeps both a full durable transcript and a smaller working memory so sessions can be resumed while preserving important state via working memory.
 6. **Delegation and bounded subagents**  
    Scoped subtasks can be delegated to helper agents that inherit enough context to help (but operate within limits).
+7. **Agent skills** discover skill folders, select an applicable skill, add its instructions to the model prompt, and log the decision.
+
+## CS440 Project 2
+
+| Path | Purpose |
+| --- | --- |
+| `mini_coding_agent.py` | Agent loop, skill discovery and matching, `use_skill` tool, and logs |
+| `.claude/skills/` | Original Lab 5 skills |
+| `intent/` | SDLC intent, specification, and implementation plan |
+| `q-learning-9b/` | Vacuum robot demo, notebook, tests, and saved results |
+| `tests/` | Agent and skill regression tests |
+
+The agent searches the target repository root for one-level skill folders under
+`skills/`, `skill/`, and `.claude/skills/`. Each folder contains `SKILL.md`
+or `skill.md`. The registry reads the name, description, and optional keywords.
+It scores the prompt against each skill's metadata using word-count cosine
+similarity and selects the best score at or above 0.25. A `/skill-name` prompt
+or a model call to `use_skill` selects by exact name. The skill body is
+included in subsequent model prompts for that turn. The model follows it with
+the agent's existing tools and approval rules.
+
+### Vacuum robot demonstration
+
+The `q-learning-9b/` folder inside this repository contains a copy of CS440 Lab 5
+with its original `check-vacuum` skill and simulator. The demo workspace contains
+`learning_todos.py`, `q_learning.ipynb`, and `q_learning_demo.py` alongside
+the simulator and tests. From the repository root, install the demo dependencies
+and verify the included implementation:
+
+```powershell
+python -m pip install -r q-learning-9b/requirements.txt
+Push-Location .\q-learning-9b
+python q_learning_demo.py verify
+Pop-Location
+```
+
+To open the included demo workspace in the agent, start Ollama per the
+[requirements](#requirements) and run this from the repository root:
+
+```powershell
+python mini_coding_agent.py --cwd q-learning-9b --approval ask --max-steps 15 --max-new-tokens 2048
+```
+
+To start from TODOs, run `python q_learning_demo.py prepare` inside a fresh
+disposable demo checkout that has the notebook and helper but no
+`learning_todos.py`. Preparation generates the learner starter, clears
+notebook outputs, and removes any existing `results.json` from that checkout.
+Launch the agent from the repository root and pass that checkout's path to
+`--cwd`. At the agent prompt, enter `/skills` to verify discovery. Then try:
+
+> Check the Lab 5 notebook for the vacuum robot and use focused specialists to review the environment, requirements, and code features. To solve the Lab 4 vacuum robot problem, implement the five Q-learning TODOs in learning_todos.py. Read the environment and tests for the expected interfaces. Use only observations from the simulator. Then run python q_learning_demo.py verify and report the results. Keep the simulator and tests intact.
+
+Review the tool arguments when the agent requests approval. Approve the
+checker command, learner-file edits, and verification command if they match the
+task. The verification command copies the learner into the notebook,
+runs the checker and Q-learning tests, then trains and evaluates if those
+checks succeed. A syntax checker pass can still contain unfinished TODOs.
+The `verify` command writes fresh `results.json` only after successful training
+and evaluation. To trigger the skill explicitly, prefix the prompt with
+`/check-vacuum`.
+
+To display the skill log from a run in the included demo workspace, open a
+second terminal at the repository root:
+
+```powershell
+Get-Content -LiteralPath '.\q-learning-9b\.mini-coding-agent\skills.log' |
+  ForEach-Object { $_ | ConvertFrom-Json } |
+  Where-Object { $_.depth -eq 0 } |
+  ConvertTo-Json -Depth 6
+```
+
+Show the `prompt`, `similarity_check`, and `skill_executed` records for the
+same session. The execution record means the instructions were activated.
+Use the tool calls, the source diff, and the test or training output to show
+what the agent completed and what remains.
+Logs store prompt text locally. Delegated calls have their own session IDs and
+`depth: 1` records.
+
+To run the automated tests from the agent repository:
+
+```powershell
+python -m pip install -e . pytest
+python -m pytest -q
+```
 
 &nbsp;
 ## Requirements

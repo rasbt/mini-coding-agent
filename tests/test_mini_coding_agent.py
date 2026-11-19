@@ -30,6 +30,52 @@ def build_agent(tmp_path, outputs, **kwargs):
     )
 
 
+def test_skill_matches_and_resets_on_the_next_request(tmp_path):
+    folder = tmp_path / "skill" / "check-vacuum"
+    folder.mkdir(parents=True)
+    (folder / "skill.md").write_text(
+        "---\nname: check-vacuum\ndescription: Review vacuum robot context.\n---\n"
+        "Read the persistent project decisions.",
+        encoding="utf-8",
+    )
+    agent = build_agent(tmp_path, ["<final>Checked.</final>", "<final>Hello.</final>"])
+
+    agent.ask("Review vacuum robot context")
+    assert "Read the persistent project decisions." in agent.prompt("Continue")
+
+    agent.ask("Hello")
+    assert "Active skill:" not in agent.prompt("Hello")
+    events = [json.loads(line) for line in agent.skill_log.path.read_text().splitlines()]
+    assert [event["event"] for event in events] == [
+        "prompt", "similarity_check", "skill_executed", "prompt", "similarity_check",
+    ]
+    assert events[0]["prompt"] == "Review vacuum robot context"
+    assert events[1]["scores"]["check-vacuum"] >= events[1]["threshold"]
+    assert events[2]["description"] == "Review vacuum robot context."
+    assert events[4]["selected"] is None
+
+
+def test_use_skill_logs_the_mid_run_trigger(tmp_path):
+    folder = tmp_path / ".claude" / "skills" / "check-vacuum"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text("Check the vacuum context.", encoding="utf-8")
+    agent = build_agent(tmp_path, [
+        '<tool>{"name":"use_skill","args":{"name":"check-vacuum"}}</tool>',
+        "<final>Checked.</final>",
+    ])
+
+    agent.ask("Hello")
+    events = [json.loads(line) for line in agent.skill_log.path.read_text().splitlines()]
+    trigger, match, execution = events[-3:]
+    assert trigger["source"] == "tool"
+    assert trigger["prompt"] == "check-vacuum"
+    assert match["method"] == "exact_name"
+    assert match["selected"] == "check-vacuum"
+    assert execution["skill"] == "check-vacuum"
+    assert execution["trigger"] == "tool"
+    assert "Check the vacuum context." in agent.prompt("Continue")
+
+
 def test_agent_runs_tool_then_final(tmp_path):
     (tmp_path / "hello.txt").write_text("alpha\nbeta\n", encoding="utf-8")
     agent = build_agent(
@@ -232,6 +278,30 @@ def test_repeated_identical_tool_call_is_rejected(tmp_path):
     result = agent.run_tool("list_files", {})
 
     assert result == "error: repeated identical tool call for list_files; choose a different tool or return a final answer"
+
+
+@pytest.mark.parametrize("name,args", [
+    ("run_shell", {"command": "python scripts/check_project.py"}),
+    ("patch_file", {"path": "README.md", "old_text": "demo", "new_text": "updated"}),
+])
+def test_approval_is_not_repeated_until_a_new_request_or_edit(tmp_path, monkeypatch, name, args):
+    agent = build_agent(tmp_path, [], approval_policy="ask")
+    approvals = []
+    monkeypatch.setattr(agent, "approve", lambda name, args: approvals.append(name) or False)
+    def record(role, tool="", tool_args=None, content=""):
+        agent.record({"role": role, "name": tool, "args": tool_args, "content": content})
+
+    record("user")
+    record("tool", name, args, agent.run_tool(name, args))
+    record("tool", "check-vacuum", {}, "error: unknown tool 'check-vacuum'")
+    assert "repeated identical tool call" in agent.run_tool(name, args)
+    assert len(approvals) == 1
+
+    record("tool", "patch_file", {"path": "learning_todos.py"}, "patched learning_todos.py")
+    assert "approval denied" in agent.run_tool(name, args)
+    record("user")
+    assert "approval denied" in agent.run_tool(name, args)
+    assert len(approvals) == 3
 
 
 def test_welcome_screen_keeps_box_shape_for_long_paths(tmp_path):

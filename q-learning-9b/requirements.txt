@@ -1,0 +1,4 @@
+# Dependencies for q_learning.ipynb and aima.agents
+numpy
+ipython
+ipykernel
