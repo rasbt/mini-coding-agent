@@ -397,3 +397,21 @@ def test_ollama_client_posts_expected_payload():
     assert captured["body"]["raw"] is False
     assert captured["body"]["think"] is False
     assert captured["body"]["options"]["num_predict"] == 42
+
+
+def test_prompt_logging(tmp_path):
+    agent = build_agent(tmp_path, ["<final>Hello!</final>"])
+
+    agent.ask("Test prompt logging")
+
+    log_path = tmp_path / ".mini-coding-agent" / "skill_events.jsonl"
+
+    assert log_path.exists()
+
+    with log_path.open("r", encoding="utf-8") as file:
+        entry = json.loads(file.readline())
+
+    assert entry["event"] == "prompt_received"
+    assert entry["prompt"] == "Test prompt logging"
+    assert entry["session_id"] == agent.session["id"]
+    assert "timestamp" in entry
