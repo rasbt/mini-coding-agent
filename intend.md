@@ -1,5 +1,7 @@
 # Intent: Agent Skills Component
 
+SDLC stage 1 of 4: **Intent** -> spec.md -> plan.md -> validation.md
+
 ## Project Goal
 
 The goal of this project is to extend the existing mini coding agent by implementing an agent skills component. This component will allow the agent to identify available skills and use their instructions when relevant to a user's prompt or when a specific skill is needed during execution.
