@@ -2,11 +2,11 @@
 
 Author: Catrina Coons. Status: draft (2026-11-16). Source: intent/agent-skills/intent.md
 
-Constraints carried in: standard library only; keyword-based similarity; "ask" stays the default and skills never bypass approval; no behavior change when skills/ is absent; class skill format.
+Constraints carried in: standard library only; keyword-based similarity; "ask" stays the default and skills never bypass approval; no behavior change when .claude/skills/ is absent; class skill format.
 
 ## Definitions
 
-Skill: a folder skills/<name>/ (relative to the workspace repo root) that contains SKILL.md.
+Skill: a folder .claude/skills/<name>/ (relative to the workspace repo root) that contains SKILL.md.
 
 SKILL.md: a frontmatter block between --- lines with name and description (required) and keywords (optional, comma-separated), followed by a markdown body.
 
@@ -18,9 +18,9 @@ Prompt terms: the keyword set built from the user's request.
 
 ### Discovery
 
-R1. At startup, the agent loads every skills/*/SKILL.md under the workspace repo root. A skill with missing or broken frontmatter is skipped, and a warning is logged. The agent does not crash.
+R1. At startup, the agent loads every .claude/skills/*/SKILL.md under the workspace repo root. A skill with missing or broken frontmatter is skipped, and a warning is logged. The agent does not crash.
 
-R2. If there is no skills/ folder, or it is empty, the agent behaves exactly as it did before: same prompt and same tools. All existing tests still pass.
+R2. If there is no .claude/skills/ folder, or it is empty, the agent behaves exactly as it did before: same prompt and same tools. All existing tests still pass.
 
 R3. The stable prompt prefix includes a short "Available skills" list (name plus description only). This lets the model know which skills exist without loading their bodies.
 
@@ -100,7 +100,7 @@ Active set: stored for the current ask(). It is cleared at the start of the next
 
 Frontmatter parsing: a minimal standard-library parser that reads key: value lines between the first two --- lines. Full YAML is not supported.
 
-CLI: two new flags, --skill-threshold (float, default 0.25) and --max-skills (int, default 1). A new /skills REPL command lists the loaded skills.
+CLI: two new flags, --skill-threshold (float, default 0.25) and --max-skills (int, default 1). A new .claude/skills REPL command lists the loaded skills.
 
 Answers to the intent's open questions
 

@@ -8,7 +8,7 @@ mini_coding_agent.py: new SkillLibrary class; changes to MiniAgent.__init__, bui
 
 tests/test_skills.py (new): unit tests that use FakeModelClient and tmp_path.
 
-skills/grid-validation/SKILL.md, skills/reward-design/SKILL.md, skills/transition-testing/SKILL.md (ported, paths updated), skills/q-learning-training/SKILL.md (new).
+.claude/skills/grid-validation/SKILL.md, .claude/skills/reward-design/SKILL.md, .claude/skills/transition-testing/SKILL.md (ported, paths updated), .claude/skills/q-learning-training/SKILL.md (new).
 
 lab/vacuum-robot/: context/vacuum-environment.md, environment.py, q_learning.py, tests/. The agent writes these during the demo run, not by hand.
 README.md: a Project 2 section at the top.
