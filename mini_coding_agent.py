@@ -9,6 +9,7 @@ import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from skill_logger import log_event
 
 
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
@@ -447,6 +448,13 @@ class MiniAgent:
         if not memory["task"]:
             memory["task"] = clip(user_message.strip(), 300)
         self.record({"role": "user", "content": user_message, "created_at": now()})
+        log_event(
+            self.root / ".mini-coding-agent" / "skill_events.jsonl",
+            "prompt_received",
+            self.session["id"],
+            prompt=user_message,
+        )
+
 
         tool_steps = 0
         attempts = 0
