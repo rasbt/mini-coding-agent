@@ -1,3 +1,35 @@
+# Project 2: Agent Skills Component for mini-coding-agent
+Group 11: Catrina Coons, Yulisa Medrano
+
+
+----
+# Handoff to Yulisa for 2nd Part of the Project: 
+
+I've finished the first half of the SDLC: intent, spec, plan, plus a README draft, and my video. They're in intent/agent-skills/ and README.md is drafted. Everything from here on is yours: implementation into mini-coding-agent.py, skills from the Lab 5 and testing it, finish the README, and your half of the video. Treat spec.md as the contract and plan.md as your guide, it will walk you through the implementation. The requirement numbers (R1–R21) are meant to show up in your test names and commit messages. You can then import the skills from Lab 5, just be sure to change the file path and add the keywords. Tune the agent with a few test prompts to see if it triggers the skills from keywords correctly, then have it build the vacuum robot environment just like we made Claude Code do for Lab 5. 
+
+If you disagree with a design decision, go ahead and change it. Just update spec.md/plan.md in the same commit. Lmk if you have any questions!
+
+----
+
+mini-coding-agent already has five of the six coding-agent components from class. This 
+fork adds the missing one: agent skills. The agent finds skill folders such as skills/
+reward-design/SKILL.md, checks each request against them using keyword similarity, loads 
+the best match into its prompt, and can also load a skill on its own during a task. Every 
+prompt, similarity check and executed skill is logged. We demonstrate it by having the 
+agent build and train a Q-learning vacuum robot (the Lab).
+
+## SDLC documents
+
+intent.md - The problem, the desired outcome, constraints, open questions
+spec.md - Numbered requirements R1–R21, the design, areas of concern
+plan.md - Files that change, order of work (citing R#), risks, proof
+
+## How the skills componenet works
+
+[TODO]
+
+### Requirements are unchanged from original Mini-Coding_Agent directions
+
 &nbsp;
 # Mini-Coding-Agent
 

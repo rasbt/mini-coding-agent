@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 DOC_NAMES = ("AGENTS.md", "README.md", "pyproject.toml", "package.json")
-HELP_TEXT = "/help, /memory, /session, /reset, /exit"
+HELP_TEXT = "/help, /skills, /memory, /session, /reset, /exit"
 WELCOME_ART = (
     "/\\     /\\\\",
     "{  `---'  }",
@@ -25,6 +25,7 @@ HELP_DETAILS = "\n".join(
     [
         "Commands:",
         "/help    Show this help message.",
+        "/skills  Show discovered agent skills.",
         "/memory  Show the agent's distilled working memory.",
         "/session Show the path to the saved session file.",
         "/reset   Clear the current session history and memory.",
@@ -222,6 +223,60 @@ class OllamaModelClient:
         return data.get("response", "")
 
 
+class SkillLibrary:
+    """Discover and score workspace-local SKILL.md files (stdlib only)."""
+
+    STOP_WORDS = {"the", "and", "for", "with", "from", "that", "this", "when", "into",
+                  "use", "using", "are", "can", "will", "you", "your", "one", "each",
+                  "skill", "skills", "robot", "vacuum", "lab"}
+
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+        self.skills = {}
+        self.warnings = []
+        directory = self.root / ".claude" / "skills"
+        if not directory.is_dir():
+            return
+        for path in sorted(directory.glob("*/SKILL.md")):
+            try:
+                if not path.resolve().is_relative_to(self.root):
+                    raise ValueError("skill path escapes workspace")
+                raw = path.read_text(encoding="utf-8")
+                match = re.match(r"\A---\s*\n(.*?)\n---\s*\n(.*)\Z", raw, re.S)
+                if not match:
+                    raise ValueError("missing YAML frontmatter")
+                fields = {}
+                for line in match.group(1).splitlines():
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        fields[key.strip()] = value.strip().strip('"\'')
+                name, description = fields.get("name", ""), fields.get("description", "")
+                if not name or not description or name != path.parent.name:
+                    raise ValueError("invalid name or description")
+                keywords = fields.get("keywords", "").strip("[]")
+                terms = self.terms(" ".join((name, description, keywords.replace(",", " "))))
+                self.skills[name] = {"name": name, "description": description,
+                                     "path": str(path.relative_to(self.root)),
+                                     "body": match.group(2).strip(), "terms": terms}
+            except (OSError, ValueError, UnicodeError) as exc:
+                self.warnings.append(f"{path}: {exc}")
+
+    @classmethod
+    def terms(cls, value):
+        return {term for term in re.findall(r"[a-z0-9]+", value.lower())
+                if len(term) >= 3 and term not in cls.STOP_WORDS}
+
+    def rank(self, prompt):
+        words = self.terms(prompt)
+        scores = []
+        for skill in self.skills.values():
+            matched = sorted(words & skill["terms"])
+            score = len(matched) / len(skill["terms"]) if skill["terms"] else 0.0
+            scores.append({"name": skill["name"], "score": round(score, 3),
+                           "matched_keywords": matched})
+        return sorted(scores, key=lambda row: (-row["score"], row["name"]))
+
+
 class MiniAgent:
     def __init__(
         self,
@@ -235,6 +290,8 @@ class MiniAgent:
         depth=0,
         max_depth=1,
         read_only=False,
+        skill_threshold=0.25,
+        max_skills=1,
     ):
         self.model_client = model_client
         self.workspace = workspace
@@ -246,6 +303,12 @@ class MiniAgent:
         self.depth = depth
         self.max_depth = max_depth
         self.read_only = read_only
+        self.skill_threshold = skill_threshold
+        self.max_skills = max_skills
+        self.skill_library = SkillLibrary(self.root)
+        self.active_skills = {}
+        for warning in self.skill_library.warnings:
+            print(f"[skill] warning: {warning}", file=sys.stderr)
         self.session = session or {
             "id": datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
             "created_at": now(),
@@ -318,6 +381,13 @@ class MiniAgent:
                 "run": self.tool_patch_file,
             },
         }
+        if self.skill_library.skills:
+            tools["load_skill"] = {
+                "schema": {"name": "str"},
+                "risky": False,
+                "description": "Activate a named skill and read its instructions.",
+                "run": self.tool_load_skill,
+            }
         if self.depth < self.max_depth:
             tools["delegate"] = {
                 "schema": {"task": "str", "max_steps": "int=3"},
@@ -362,15 +432,35 @@ class MiniAgent:
             "- Before writing tests for existing code, read the implementation first.",
             "- When writing tests, match the current implementation unless the user explicitly asked you to change the code.",
             "- New files should be complete and runnable, including obvious imports.",
+            "- Agent skills are stored in .claude/skills/, not intent/agent-skills/skills/.",
+            "- Always use list_files to verify a directory before reading an unknown file path.",
+            "- If a tool reports that a path does not exist, do not repeat the same failed path.",
+            "- Tool calls must contain valid JSON with no extra characters.",
+            "- After successfully reading a requested file, summarize its contents and return a final answer.",
             "- Do not repeat the same tool call with the same arguments if it did not help. Choose a different tool or return a final answer.",
+            "- Never claim a file was modified unless a write or edit tool succeeded.",
+            "- Never claim tests passed unless their execution results confirm it.",
+            "- If a file was already read successfully, use its content rather than repeating the same read.",
+            "- When asked to apply a skill, inspect the relevant project files and report evidence for each required check.",
+            "- If a tool call fails, correct the arguments or report the failure rather than repeating it.",
+            "- Agent skills are stored ONLY in .claude/skills/<skill-name>/SKILL.md.",
+            "- The intent/agent-skills/ directory contains SDLC documentation, NOT executable skills.",
+            "- Automatically activated skill instructions are already included in the prompt.",
+            "- Do not use read_file or list_files to rediscover an already active skill.",
+            "- When a skill is active, apply its instructions to the relevant project files.",
+            "- If the required project files are missing, report that limitation instead of repeatedly searching.",
             "- Required tool arguments must not be empty. Do not call read_file, write_file, patch_file, run_shell, or delegate with args={}.",
         ])
+        skill_listing = ("Available skills:\n" + "\n".join(
+            f"- {skill['name']}: {skill['description']}"
+            for skill in self.skill_library.skills.values())) if self.skill_library.skills else ""
         return "\n\n".join([
             "You are Mini-Coding-Agent, a small local coding agent running through Ollama.",
             "Rules:\n" + rules,
             "Tools:\n" + tool_text,
             "Valid response examples:\n" + examples,
             self.workspace.text(),
+            *([skill_listing] if skill_listing else []),
         ])
 
     def memory_text(self):
@@ -407,7 +497,7 @@ class MiniAgent:
                 seen_reads.add(path)
 
             if item["role"] == "tool":
-                limit = 900 if recent else 180
+                limit = 3000 if recent else 500
                 lines.append(f"[tool:{item['name']}] {json.dumps(item['args'], sort_keys=True)}")
                 lines.append(clip(item["content"], limit))
             else:
@@ -420,12 +510,24 @@ class MiniAgent:
     #### 2) Prompt Shape And Cache Reuse (Continued) #######
     ########################################################
     def prompt(self, user_message):
+        active = "\n\n".join(
+            f"Active skill: {name}\n{skill['body']}"
+            for name, skill in self.active_skills.items()
+        )
         return "\n\n".join([
-            self.prefix,
-            self.memory_text(),
-            "Transcript:\n" + self.history_text(),
-            "Current user request:\n" + user_message,
-        ])
+        self.prefix,
+        *([active] if active else []),
+        self.memory_text(),
+        "Current user request:\n" + user_message,
+        "Transcript:\n" + self.history_text(),
+        (
+            "Continue from the transcript above. "
+            "If the requested file has already been read successfully, "
+            "do not read it again. Use the available content to answer. "
+            "If the task is complete, respond with "
+            "<final>your answer</final>."
+        ),
+    ])
 
     ###############################################
     #### 5) Session Memory (Continued) ###########
@@ -442,7 +544,45 @@ class MiniAgent:
         note = f"{name}: {clip(str(result).replace(chr(10), ' '), 220)}"
         self.remember(memory["notes"], note, 5)
 
+    def skill_event(self, event):
+        event = {"timestamp": now(), "session_id": self.session["id"],
+                 "depth": self.depth, **event}
+        destination = self.root / ".mini-coding-agent" / "skill_log.jsonl"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.record({"role": "skill", "content": json.dumps(event), "created_at": event["timestamp"]})
+
+    def activate_skill(self, name, trigger, score=None):
+        skill = self.skill_library.skills.get(name)
+        if skill is None:
+            return "error: unknown skill; valid names: " + ", ".join(self.skill_library.skills)
+        if name in self.active_skills:
+            return f"skill '{name}' already active"
+        self.active_skills[name] = skill
+        self.skill_event({"event": "skill_executed", "trigger": trigger,
+                          "skill": name, "path": skill["path"], "score": score})
+        print(f"[skill] {name} ({'score ' + str(score) if score is not None else 'load_skill'}, {trigger})")
+        return f"activated {name}\n{skill['body']}"
+
+    def tool_load_skill(self, args):
+        return self.activate_skill(str(args.get("name", "")), "load_skill")
+
+    def check_skills(self, user_message):
+        if not self.skill_library.skills:
+            return
+        scores = self.skill_library.rank(user_message)
+        selected = [row for row in scores if row["score"] >= self.skill_threshold
+                    and len(row["matched_keywords"]) >= 2][:self.max_skills]
+        self.skill_event({"event": "similarity_check", "trigger": "prompt",
+                          "prompt": user_message, "threshold": self.skill_threshold,
+                          "scores": scores, "selected": [row["name"] for row in selected]})
+        for row in selected:
+            self.activate_skill(row["name"], "prompt", row["score"])
+
     def ask(self, user_message):
+        self.active_skills = {}
+        self.check_skills(user_message)
         memory = self.session["memory"]
         if not memory["task"]:
             memory["task"] = clip(user_message.strip(), 300)
@@ -456,12 +596,28 @@ class MiniAgent:
             attempts += 1
             raw = self.model_client.complete(self.prompt(user_message), self.max_new_tokens)
             kind, payload = self.parse(raw)
+            #print(f"\n[DEBUG] Step: {attempts}")
+            #print(f"[DEBUG] Model output: {raw[:1000]}")
 
             if kind == "tool":
                 tool_steps += 1
                 name = payload.get("name", "")
                 args = payload.get("args", {})
+                if name != "load_skill" and self.repeated_tool_call(name, args):
+                    final = (
+                        f"Stopped: repeated tool call '{name} detected."
+                        " The agent could not complete the task."
+                    )
+                    self.record({
+                        "role": "assistant",
+                        "content": final,
+                        "created_at": now(),
+                    })
+                    return final
                 result = self.run_tool(name, args)
+                #print(f"[DEBUG] Tool: {name}")
+                #print(f"[DEBUG] Arguments: {args}")
+                #print(f"[DEBUG] Result: {result[:1500]}")
                 self.record(
                     {
                         "role": "tool",
@@ -505,7 +661,7 @@ class MiniAgent:
             if example:
                 message += f"\nexample: {example}"
             return message
-        if self.repeated_tool_call(name, args):
+        if name != "load_skill" and self.repeated_tool_call(name, args):
             return f"error: repeated identical tool call for {name}; choose a different tool or return a final answer"
         if tool["risky"] and not self.approve(name, args):
             return f"error: approval denied for {name}"
@@ -530,6 +686,7 @@ class MiniAgent:
             "write_file": '<tool name="write_file" path="binary_search.py"><content>def binary_search(nums, target):\n    return -1\n</content></tool>',
             "patch_file": '<tool name="patch_file" path="binary_search.py"><old_text>return -1</old_text><new_text>return mid</new_text></tool>',
             "delegate": '<tool>{"name":"delegate","args":{"task":"inspect README.md","max_steps":3}}</tool>',
+            "load_skill": '<tool>{"name":"load_skill","args":{"name":"grid-validation"}}</tool>',
         }
         return examples.get(name, "")
 
@@ -589,6 +746,11 @@ class MiniAgent:
             count = text.count(old_text)
             if count != 1:
                 raise ValueError(f"old_text must occur exactly once, found {count}")
+            return
+
+        if name == "load_skill":
+            if not str(args.get("name", "")).strip():
+                raise ValueError("name must not be empty")
             return
 
         if name == "delegate":
@@ -716,6 +878,7 @@ class MiniAgent:
 
     def reset(self):
         self.session["history"] = []
+        self.active_skills = {}
         self.session["memory"] = {"task": "", "files": [], "notes": []}
         self.session_store.save(self.session)
 
@@ -763,6 +926,12 @@ class MiniAgent:
             raise ValueError("invalid line range")
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         body = "\n".join(f"{number:>4}: {line}" for number, line in enumerate(lines[start - 1:end], start=start))
+        if start > len(lines):
+            return (
+                f"Error: Requested line {start}, but this file "
+                f"only contains {len(lines)}. "
+                "Do not request this range again."
+            )
         return f"# {path.relative_to(self.root)}\n{body}"
 
     def tool_search(self, args):
@@ -860,6 +1029,8 @@ class MiniAgent:
             depth=self.depth + 1,
             max_depth=self.max_depth,
             read_only=True,
+            skill_threshold=self.skill_threshold,
+            max_skills=self.max_skills,
         )
         child.session["memory"]["task"] = task
         child.session["memory"]["notes"] = [clip(self.history_text(), 300)]
@@ -931,6 +1102,8 @@ def build_agent(args):
             approval_policy=args.approval,
             max_steps=args.max_steps,
             max_new_tokens=args.max_new_tokens,
+            skill_threshold=args.skill_threshold,
+            max_skills=args.max_skills,
         )
     return MiniAgent(
         model_client=model,
@@ -939,6 +1112,8 @@ def build_agent(args):
         approval_policy=args.approval,
         max_steps=args.max_steps,
         max_new_tokens=args.max_new_tokens,
+        skill_threshold=args.skill_threshold,
+        max_skills=args.max_skills,
     )
 
 
@@ -962,6 +1137,8 @@ def build_arg_parser():
     parser.add_argument("--max-steps", type=int, default=6, help="Maximum tool/model iterations per request.")
     parser.add_argument("--max-new-tokens", type=int, default=512, help="Maximum model output tokens per step.")
     parser.add_argument("--temperature", type=float, default=0.2, help="Sampling temperature sent to Ollama.")
+    parser.add_argument("--skill-threshold", type=float, default=0.25, help="Minimum skill match score.")
+    parser.add_argument("--max-skills", type=int, default=1, help="Maximum automatically activated skills.")
     parser.add_argument("--top-p", type=float, default=0.9, help="Top-p sampling value sent to Ollama.")
     return parser
 
@@ -996,6 +1173,9 @@ def main(argv=None):
             return 0
         if user_input == "/help":
             print(HELP_DETAILS)
+            continue
+        if user_input == "/skills":
+            print("\n".join(f"{x['name']}: {x['description']}" for x in agent.skill_library.skills.values()) or "No skills found.")
             continue
         if user_input == "/memory":
             print(agent.memory_text())
